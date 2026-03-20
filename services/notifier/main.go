@@ -12,7 +12,6 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -31,11 +30,6 @@ type Alert struct {
 	Resolved bool
 }
 
-var (
-	mu         sync.RWMutex
-	alertCount int
-	lastAlerts []*Alert
-)
 
 // Prometheus metrics
 var (
@@ -140,11 +134,6 @@ func alertLoop() {
 				sendNotification(a)
 			}
 		}
-
-		mu.Lock()
-		alertCount += len(fired)
-		lastAlerts = fired
-		mu.Unlock()
 
 		if len(fired) == 0 {
 			log.Printf("✅ All protocols healthy (no alerts)")
