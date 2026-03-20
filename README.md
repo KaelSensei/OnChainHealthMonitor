@@ -219,24 +219,31 @@ RPC_ENDPOINT=https://mainnet.infura.io/v3/<YOUR_KEY>
 ## Decision Log
 
 ### Why Go?
+
 Minimal external dependencies, single static binary, excellent stdlib HTTP server - ideal for writing observable microservices without framework overhead. Each service compiles to a ~5MB binary.
 
 ### Why Prometheus + Grafana over Datadog?
+
 Open-source, self-hosted, zero cost. Pull-based scraping matches the `/metrics` endpoints natively. Grafana Alerting provides SLO-based rules without a separate tool.
 
 ### Why Jaeger?
+
 Native OTLP receiver, lightweight all-in-one Docker image, clean UI. OpenTelemetry SDK is vendor-neutral - swapping Jaeger for Honeycomb or Tempo is a config change.
 
 ### Why GitHub Actions?
+
 The repo lives on GitHub. Native integration means no extra webhook setup, and path-based triggers (`on: push: paths:`) enable proper monorepo CI - only the changed service gets rebuilt.
 
 ### Why Kong?
+
 Open-source, plugin-based, battle-tested at scale. Rate limiting, authentication, and request logging are single-line plugin configurations - no custom middleware code needed.
 
 ### Why Terraform?
+
 Declarative, provider-agnostic, and produces an auditable state file. Infrastructure changes are reviewed in PRs the same way code changes are - nothing is clicked manually.
 
 ### Why Helm?
+
 Kubernetes manifests need per-environment value overrides (image tag, replica count, resource limits). Helm templates are the standard way to manage that across staging/production without duplicating YAML.
 
 ---
