@@ -1,0 +1,6 @@
+apiVersion: v2
+name: analyzer
+description: OnChain Health Monitor Analyzer service - anomaly detection and protocol scoring
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

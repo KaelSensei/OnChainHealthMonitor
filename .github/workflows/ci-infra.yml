@@ -1,0 +1,33 @@
+name: CI - infra
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docker-compose.yml'
+      - 'gateway/**'
+      - 'openapi.yaml'
+      - '.github/workflows/ci-infra.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docker-compose.yml'
+      - 'gateway/**'
+      - 'openapi.yaml'
+      - '.github/workflows/ci-infra.yml'
+
+jobs:
+  validate:
+    name: Validate Infra Configs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate docker-compose
+        run: docker compose config --quiet
+
+      - name: Validate OpenAPI spec
+        run: |
+          npm install -g @redocly/cli@latest
+          redocly lint openapi.yaml
+        continue-on-error: true

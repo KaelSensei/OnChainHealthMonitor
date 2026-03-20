@@ -1,0 +1,60 @@
+collector:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/kaelsensei/onchainhealthmonitor/collector
+    tag: latest
+    pullPolicy: Always
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+analyzer:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/kaelsensei/onchainhealthmonitor/analyzer
+    tag: latest
+    pullPolicy: Always
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+notifier:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/kaelsensei/onchainhealthmonitor/notifier
+    tag: latest
+    pullPolicy: Always
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+api:
+  replicaCount: 2
+  image:
+    repository: ghcr.io/kaelsensei/onchainhealthmonitor/api
+    tag: latest
+    pullPolicy: Always
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70

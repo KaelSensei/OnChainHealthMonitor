@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "collector.fullname" . }}-config
+  labels:
+    {{- include "collector.labels" . | nindent 4 }}
+data:
+  SERVICE_PORT: "8081"
+  SERVICE_NAME: "collector"
+  LOG_LEVEL: "info"

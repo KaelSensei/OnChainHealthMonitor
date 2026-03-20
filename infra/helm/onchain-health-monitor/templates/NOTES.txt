@@ -1,0 +1,22 @@
+DeFi Health Monitor has been deployed!
+
+Services deployed:
+  - collector  (port 8081) — on-chain data ingestion
+  - analyzer   (port 8082) — anomaly detection & scoring
+  - notifier   (port 8083) — alert dispatch
+  - api        (port 8080) — REST/WebSocket gateway
+
+To check the status of all pods:
+  kubectl get pods -n {{ .Release.Namespace }}
+
+To view the API service:
+  kubectl get svc -n {{ .Release.Namespace }} {{ .Release.Name }}-api
+
+To forward the API locally:
+  kubectl port-forward svc/{{ .Release.Name }}-api 8080:8080 -n {{ .Release.Namespace }}
+
+To upgrade the release:
+  helm upgrade {{ .Release.Name }} infra/helm/defi-health-monitor \
+    --namespace {{ .Release.Namespace }}
+
+Prometheus scrape targets are configured via ServiceMonitors (requires Prometheus Operator).

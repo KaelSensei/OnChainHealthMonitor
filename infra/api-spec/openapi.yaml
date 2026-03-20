@@ -1,0 +1,173 @@
+openapi: "3.0.3"
+info:
+  title: OnChain Health Monitor API
+  description: |
+    REST API for the OnChain Health Monitor platform.
+    Exposes real-time health scores and metrics for monitored DeFi protocols.
+
+    All endpoints are available via the Kong API Gateway at `http://localhost:8000`.
+    Direct API access (bypassing Kong) is available at `http://localhost:8080` for development.
+  version: "1.0.0"
+  contact:
+    name: OnChain Health Monitor
+    url: https://github.com/KaelSensei/OnChainHealthMonitor
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8000
+    description: Kong API Gateway (production-like)
+  - url: http://localhost:8080
+    description: Direct API (development)
+
+tags:
+  - name: protocols
+    description: DeFi protocol health monitoring
+  - name: health
+    description: Service health checks
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Health check
+      description: Returns service status. Used by Docker health checks and load balancers.
+      operationId: getHealth
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: ok
+
+  /api/v1/protocols:
+    get:
+      tags: [protocols]
+      summary: List all monitored protocols
+      description: Returns the current health scores and metadata for all monitored DeFi protocols.
+      operationId: listProtocols
+      responses:
+        "200":
+          description: List of protocols with health data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProtocolListResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/protocols/{id}:
+    get:
+      tags: [protocols]
+      summary: Get protocol by ID
+      description: Returns health score and metadata for a specific DeFi protocol.
+      operationId: getProtocolById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Protocol identifier (slug)
+          schema:
+            type: string
+            example: uniswap
+      responses:
+        "200":
+          description: Protocol found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Protocol"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+
+    Protocol:
+      type: object
+      required: [id, name, health_score, status, tvl_usd, price_usd, last_updated]
+      properties:
+        id:
+          type: string
+          description: Unique protocol slug
+          example: uniswap
+        name:
+          type: string
+          description: Human-readable protocol name
+          example: Uniswap
+        health_score:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Current health score (0=critical, 100=healthy)
+          example: 87
+        status:
+          type: string
+          enum: [healthy, degraded, critical]
+          description: Derived status from health_score
+          example: healthy
+        tvl_usd:
+          type: number
+          format: float
+          description: Total Value Locked in USD
+          example: 4523891234.56
+        price_usd:
+          type: number
+          format: float
+          description: Protocol token price in USD
+          example: 12.34
+        last_updated:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp of last update
+          example: "2026-03-18T21:00:00Z"
+
+    ProtocolListResponse:
+      type: object
+      required: [protocols, count]
+      properties:
+        protocols:
+          type: array
+          items:
+            $ref: "#/components/schemas/Protocol"
+        count:
+          type: integer
+          example: 3
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "protocol not found"
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "internal server error"

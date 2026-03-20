@@ -1,0 +1,19 @@
+apiVersion: v2
+name: onchain-health-monitor
+description: OnChain Health Monitor - complete platform deployment
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+dependencies:
+  - name: collector
+    version: "0.1.0"
+    repository: "file://../services/collector"
+  - name: analyzer
+    version: "0.1.0"
+    repository: "file://../services/analyzer"
+  - name: notifier
+    version: "0.1.0"
+    repository: "file://../services/notifier"
+  - name: api
+    version: "0.1.0"
+    repository: "file://../services/api"

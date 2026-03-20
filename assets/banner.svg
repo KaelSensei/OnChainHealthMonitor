@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 250" width="900" height="250">
+  <defs>
+    <linearGradient id="bannerBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0d1117"/>
+      <stop offset="40%" style="stop-color:#0d1117"/>
+      <stop offset="100%" style="stop-color:#161b22"/>
+    </linearGradient>
+    <linearGradient id="bannerPulse" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#00d68f;stop-opacity:0"/>
+      <stop offset="15%" style="stop-color:#00d68f"/>
+      <stop offset="85%" style="stop-color:#00e5a0"/>
+      <stop offset="100%" style="stop-color:#00d68f;stop-opacity:0"/>
+    </linearGradient>
+    <linearGradient id="bannerHex" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a73e8;stop-opacity:0.12"/>
+      <stop offset="100%" style="stop-color:#00d68f;stop-opacity:0.06"/>
+    </linearGradient>
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#e6edf3"/>
+      <stop offset="100%" style="stop-color:#c9d1d9"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#00d68f"/>
+      <stop offset="100%" style="stop-color:#1a73e8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="250" rx="12" fill="url(#bannerBg)"/>
+
+  <!-- Subtle border -->
+  <rect width="900" height="250" rx="12" fill="none" stroke="#30363d" stroke-width="1"/>
+
+  <!-- Background hex grid pattern (very subtle) -->
+  <g opacity="0.04" stroke="#58a6ff" stroke-width="0.8" fill="none">
+    <polygon points="50,40 76,55 76,85 50,100 24,85 24,55"/>
+    <polygon points="102,40 128,55 128,85 102,100 76,85 76,55"/>
+    <polygon points="50,100 76,115 76,145 50,160 24,145 24,115"/>
+    <polygon points="102,100 128,115 128,145 102,160 76,145 76,115"/>
+    <polygon points="154,40 180,55 180,85 154,100 128,85 128,55"/>
+    <polygon points="154,100 180,115 180,145 154,160 128,145 128,115"/>
+    <polygon points="50,160 76,175 76,205 50,220 24,205 24,175"/>
+    <polygon points="102,160 128,175 128,205 102,220 76,205 76,175"/>
+
+    <!-- Right side decorative hexes -->
+    <polygon points="750,20 776,35 776,65 750,80 724,65 724,35"/>
+    <polygon points="802,20 828,35 828,65 802,80 776,65 776,35"/>
+    <polygon points="854,20 880,35 880,65 854,80 828,65 828,35"/>
+    <polygon points="750,80 776,95 776,125 750,140 724,125 724,95"/>
+    <polygon points="802,80 828,95 828,125 802,140 776,125 776,95"/>
+    <polygon points="854,80 880,95 880,125 854,140 828,125 828,95"/>
+    <polygon points="750,140 776,155 776,185 750,200 724,185 724,155"/>
+    <polygon points="802,140 828,155 828,185 802,200 776,185 776,155"/>
+    <polygon points="854,140 880,155 880,185 854,200 828,185 828,155"/>
+    <polygon points="750,200 776,215 776,245 750,260 724,245 724,215"/>
+    <polygon points="802,200 828,215 828,245 802,260 776,245 776,215"/>
+  </g>
+
+  <!-- Logo icon (embedded, smaller) -->
+  <g transform="translate(220, 55)">
+    <!-- Hex -->
+    <polygon points="45,0 81.6,21 81.6,63 45,84 8.4,63 8.4,21"
+             fill="url(#bannerHex)" stroke="#1a73e8" stroke-width="0.8" stroke-opacity="0.3"/>
+    <!-- Nodes -->
+    <circle cx="45" cy="0" r="2" fill="#1a73e8" opacity="0.5"/>
+    <circle cx="81.6" cy="21" r="2" fill="#1a73e8" opacity="0.35"/>
+    <circle cx="81.6" cy="63" r="2" fill="#1a73e8" opacity="0.35"/>
+    <circle cx="45" cy="84" r="2" fill="#1a73e8" opacity="0.5"/>
+    <circle cx="8.4" cy="63" r="2" fill="#1a73e8" opacity="0.35"/>
+    <circle cx="8.4" cy="21" r="2" fill="#1a73e8" opacity="0.35"/>
+    <!-- Pulse -->
+    <polyline
+      points="2,42 15,42 22,42 28,32 34,52 40,26 46,58 52,36 58,42 68,42 80,42"
+      fill="none" stroke="#00d68f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline
+      points="2,42 15,42 22,42 28,32 34,52 40,26 46,58 52,36 58,42 68,42 80,42"
+      fill="none" stroke="#00e5a0" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" opacity="0.12"/>
+  </g>
+
+  <!-- Project name -->
+  <text x="320" y="97" font-family="'Segoe UI', 'SF Pro Display', -apple-system, sans-serif" font-size="38" font-weight="700" fill="url(#textGrad)" letter-spacing="-0.5">
+    OnChain
+  </text>
+  <text x="320" y="140" font-family="'Segoe UI', 'SF Pro Display', -apple-system, sans-serif" font-size="38" font-weight="700" fill="url(#textGrad)" letter-spacing="-0.5">
+    Health Monitor
+  </text>
+
+  <!-- Tagline -->
+  <text x="320" y="172" font-family="'Segoe UI', 'SF Pro Display', -apple-system, sans-serif" font-size="14" fill="#8b949e" letter-spacing="0.3">
+    Real-time DeFi protocol health monitoring
+  </text>
+
+  <!-- Tech pills -->
+  <g transform="translate(320, 188)">
+    <rect x="0" y="0" width="38" height="22" rx="11" fill="#1a73e8" fill-opacity="0.15" stroke="#1a73e8" stroke-width="0.8" stroke-opacity="0.3"/>
+    <text x="19" y="15" font-family="'SF Mono', 'Fira Code', monospace" font-size="10" fill="#58a6ff" text-anchor="middle">Go</text>
+
+    <rect x="48" y="0" width="82" height="22" rx="11" fill="#00d68f" fill-opacity="0.1" stroke="#00d68f" stroke-width="0.8" stroke-opacity="0.3"/>
+    <text x="89" y="15" font-family="'SF Mono', 'Fira Code', monospace" font-size="10" fill="#3fb950" text-anchor="middle">Prometheus</text>
+
+    <rect x="140" y="0" width="62" height="22" rx="11" fill="#f97316" fill-opacity="0.1" stroke="#f97316" stroke-width="0.8" stroke-opacity="0.3"/>
+    <text x="171" y="15" font-family="'SF Mono', 'Fira Code', monospace" font-size="10" fill="#f97316" text-anchor="middle">Grafana</text>
+
+    <rect x="212" y="0" width="55" height="22" rx="11" fill="#a78bfa" fill-opacity="0.1" stroke="#a78bfa" stroke-width="0.8" stroke-opacity="0.3"/>
+    <text x="239.5" y="15" font-family="'SF Mono', 'Fira Code', monospace" font-size="10" fill="#a78bfa" text-anchor="middle">Jaeger</text>
+
+    <rect x="277" y="0" width="48" height="22" rx="11" fill="#38bdf8" fill-opacity="0.1" stroke="#38bdf8" stroke-width="0.8" stroke-opacity="0.3"/>
+    <text x="301" y="15" font-family="'SF Mono', 'Fira Code', monospace" font-size="10" fill="#38bdf8" text-anchor="middle">Kong</text>
+
+    <rect x="335" y="0" width="80" height="22" rx="11" fill="#818cf8" fill-opacity="0.1" stroke="#818cf8" stroke-width="0.8" stroke-opacity="0.3"/>
+    <text x="375" y="15" font-family="'SF Mono', 'Fira Code', monospace" font-size="10" fill="#818cf8" text-anchor="middle">Terraform</text>
+
+    <rect x="425" y="0" width="50" height="22" rx="11" fill="#fb923c" fill-opacity="0.1" stroke="#fb923c" stroke-width="0.8" stroke-opacity="0.3"/>
+    <text x="450" y="15" font-family="'SF Mono', 'Fira Code', monospace" font-size="10" fill="#fb923c" text-anchor="middle">Helm</text>
+  </g>
+
+  <!-- Horizontal accent line -->
+  <line x1="220" y1="230" x2="680" y2="230" stroke="url(#accentGrad)" stroke-width="1" opacity="0.3"/>
+</svg>

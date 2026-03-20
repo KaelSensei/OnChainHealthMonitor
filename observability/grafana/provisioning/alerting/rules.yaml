@@ -1,0 +1,135 @@
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: DeFi SLO Alerts
+    folder: OnChain Health Monitor
+    interval: 1m
+    rules:
+      - uid: protocol-health-critical
+        title: Protocol Health Critical
+        condition: C
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              expr: onchain_analyzer_health_score < 30
+              interval: ''
+              legendFormat: ''
+          - refId: C
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: classic_conditions
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+        noDataState: NoData
+        execErrState: Alerting
+        for: 1m
+        annotations:
+          summary: "Protocol health score is critical (< 30)"
+          description: "Protocol {{ $labels.protocol }} has a health score below 30, indicating critical degradation."
+        labels:
+          severity: critical
+
+      - uid: api-high-error-rate
+        title: API High Error Rate
+        condition: C
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              expr: rate(onchain_api_requests_total{status_code=~"5.."}[5m]) > 0.01
+              interval: ''
+              legendFormat: ''
+          - refId: C
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: classic_conditions
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+        noDataState: NoData
+        execErrState: Alerting
+        for: 2m
+        annotations:
+          summary: "API error rate exceeds 1%"
+          description: "The DeFi API is returning 5xx errors at a rate above 1% for path {{ $labels.path }}."
+        labels:
+          severity: warning
+
+      - uid: api-high-p99-latency
+        title: API High p99 Latency
+        condition: C
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              expr: histogram_quantile(0.99, rate(onchain_api_request_duration_seconds_bucket[5m])) > 0.5
+              interval: ''
+              legendFormat: ''
+          - refId: C
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: classic_conditions
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+        noDataState: NoData
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "API p99 latency exceeds 500ms"
+          description: "The 99th percentile latency for {{ $labels.path }} has exceeded 500ms, breaching the SLO."
+        labels:
+          severity: warning

@@ -1,0 +1,62 @@
+_format_version: "3.0"
+_transform: true
+
+services:
+  - name: onchain-api
+    url: http://api:8080
+    routes:
+      - name: protocols-list
+        paths:
+          - /api/v1/protocols
+        methods:
+          - GET
+        strip_path: false
+      - name: protocol-by-id
+        paths:
+          - ~/api/v1/protocols/(?<id>[^/]+)
+        methods:
+          - GET
+        strip_path: false
+      - name: health
+        paths:
+          - /health
+        methods:
+          - GET
+        strip_path: false
+
+  - name: swagger-ui
+    url: http://swagger-ui:8080
+    routes:
+      - name: swagger
+        paths:
+          - /swagger
+        strip_path: false
+
+plugins:
+  - name: rate-limiting
+    config:
+      minute: 60
+      hour: 1000
+      policy: local
+      fault_tolerant: true
+      hide_client_headers: false
+
+  - name: correlation-id
+    config:
+      header_name: X-Request-ID
+      generator: uuid#counter
+      echo_downstream: true
+
+  - name: response-transformer
+    config:
+      add:
+        headers:
+          - "X-Powered-By: OnChain-Health-Monitor"
+          - "X-Gateway: Kong"
+
+  - name: prometheus
+    config:
+      status_code_metrics: true
+      latency_metrics: true
+      bandwidth_metrics: true
+      upstream_health_metrics: true

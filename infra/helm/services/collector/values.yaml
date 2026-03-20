@@ -1,0 +1,41 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/kaelsensei/onchainhealthmonitor/collector
+  pullPolicy: Always
+  tag: "latest"
+
+service:
+  type: ClusterIP
+  port: 8081
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+
+env:
+  OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8081
+  initialDelaySeconds: 15
+  periodSeconds: 15
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8081
+  initialDelaySeconds: 10
+  periodSeconds: 10
