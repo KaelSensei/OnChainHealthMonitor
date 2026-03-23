@@ -391,4 +391,3 @@ Redis is configured with `maxmemory 256mb` and `allkeys-lru` eviction policy. Su
 - ✅ `github.com/redis/go-redis/v9` is the maintained community standard client for Go
 - ⚠️ Subscriptions are not persisted to disk by default (no RDB or AOF configured); a Redis restart loses all subscriptions. This is acceptable for the current scope; persistence can be enabled via `redis.conf` when needed
 - ⚠️ The set-based lookup means the notifier fetches each subscription individually after the SMEMBERS call (N+1 pattern). For the current scale (tens to hundreds of subscriptions per protocol) this is negligible; a Redis Hash or Lua script can optimise this if needed
-
