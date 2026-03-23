@@ -1,18 +1,27 @@
 // Package main implements the OnChain Health Monitor public REST API service.
-// It exposes processed DeFi protocol health data via a JSON REST API.
+// It consumes HealthEvent messages from the Kafka topic "onchain.health" to
+// keep its in-memory protocol state current, and exposes that state via a
+// JSON REST API.
 //
 // HTTP endpoints:
-//   - GET /health                    → {"status":"ok"}
-//   - GET /metrics                   → Real Prometheus metrics via promhttp
-//   - GET /api/v1/protocols          → list of monitored protocols with health scores
-//   - GET /api/v1/protocols/{id}     → single protocol by ID
+//
+//   - GET /health                -> {"status":"ok"}
+//   - GET /metrics               -> Real Prometheus metrics via promhttp
+//   - GET /api/v1/protocols      -> list of monitored protocols with health scores
+//   - GET /api/v1/protocols/{id} -> single protocol by ID
+//
+// Environment variables:
+//
+//   - KAFKA_BROKERS Comma-separated broker list (default: kafka:9092)
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +30,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/segmentio/kafka-go"
 )
 
 // Protocol represents a DeFi protocol with health metadata.
@@ -34,6 +44,16 @@ type Protocol struct {
 	TVL         float64   `json:"tvl_usd"`
 	Price       float64   `json:"price_usd"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// HealthEvent is the message consumed from the "onchain.health" topic.
+type HealthEvent struct {
+	ProtocolID string    `json:"protocol_id"`
+	Score      int       `json:"score"`
+	Label      string    `json:"label"`
+	PriceUSD   float64   `json:"price_usd"`
+	TVLUSD     float64   `json:"tvl_usd"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // statusFromScore returns a human-readable status label.
@@ -50,38 +70,38 @@ func statusFromScore(score int) string {
 
 var (
 	mu        sync.RWMutex
-	protocols = []*Protocol{
-		{
+	protocols = map[string]*Protocol{
+		"uniswap": {
 			ID:          "uniswap",
 			Name:        "Uniswap",
 			Category:    "DEX",
 			Chain:       "Ethereum",
-			HealthScore: 82,
-			Status:      statusFromScore(82),
+			HealthScore: 50,
+			Status:      statusFromScore(50),
 			TVL:         4_200_000_000,
-			Price:       6.52,
+			Price:       6.50,
 			UpdatedAt:   time.Now().UTC(),
 		},
-		{
+		"aave": {
 			ID:          "aave",
 			Name:        "Aave",
 			Category:    "Lending",
 			Chain:       "Ethereum",
-			HealthScore: 76,
-			Status:      statusFromScore(76),
+			HealthScore: 50,
+			Status:      statusFromScore(50),
 			TVL:         6_100_000_000,
-			Price:       96.10,
+			Price:       95.00,
 			UpdatedAt:   time.Now().UTC(),
 		},
-		{
+		"compound": {
 			ID:          "compound",
 			Name:        "Compound",
 			Category:    "Lending",
 			Chain:       "Ethereum",
-			HealthScore: 41,
-			Status:      statusFromScore(41),
+			HealthScore: 50,
+			Status:      statusFromScore(50),
 			TVL:         2_300_000_000,
-			Price:       51.80,
+			Price:       52.00,
 			UpdatedAt:   time.Now().UTC(),
 		},
 	}
@@ -115,13 +135,51 @@ var (
 		},
 	)
 
-	// inFlight tracks the raw count atomically for the gauge.
 	inFlight int64
 )
 
 func init() {
 	registry = prometheus.NewRegistry()
 	registry.MustRegister(requestsTotal, requestDuration, activeConnections)
+}
+
+// getEnv returns the environment variable value or a fallback.
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// consumeLoop reads HealthEvents from Kafka and updates the in-memory
+// protocol state so HTTP responses always reflect the latest scores.
+func consumeLoop(ctx context.Context, reader *kafka.Reader) {
+	for {
+		msg, err := reader.ReadMessage(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("kafka read error: %v", err)
+			continue
+		}
+
+		var he HealthEvent
+		if err := json.Unmarshal(msg.Value, &he); err != nil {
+			log.Printf("unmarshal error: %v", err)
+			continue
+		}
+
+		mu.Lock()
+		if p, ok := protocols[he.ProtocolID]; ok {
+			p.HealthScore = he.Score
+			p.Status = statusFromScore(he.Score)
+			p.Price = he.PriceUSD
+			p.TVL = he.TVLUSD
+			p.UpdatedAt = he.UpdatedAt
+		}
+		mu.Unlock()
+	}
 }
 
 // instrumentedHandler wraps an http.HandlerFunc, recording request metrics.
@@ -171,19 +229,15 @@ func healthHandler(w http.ResponseWriter, _ *http.Request) {
 }
 
 func protocolsHandler(w http.ResponseWriter, r *http.Request) {
-	// Strip prefix and route to single-protocol handler.
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/protocols")
 	path = strings.Trim(path, "/")
 
 	if path != "" {
-		// /api/v1/protocols/{id}
 		mu.RLock()
 		defer mu.RUnlock()
-		for _, p := range protocols {
-			if p.ID == path {
-				writeJSON(w, http.StatusOK, p)
-				return
-			}
+		if p, ok := protocols[path]; ok {
+			writeJSON(w, http.StatusOK, p)
+			return
 		}
 		writeJSON(w, http.StatusNotFound, map[string]string{
 			"error": fmt.Sprintf("protocol %q not found", path),
@@ -191,16 +245,21 @@ func protocolsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// /api/v1/protocols
 	mu.RLock()
 	defer mu.RUnlock()
+
+	list := make([]*Protocol, 0, len(protocols))
+	for _, p := range protocols {
+		list = append(list, p)
+	}
+
 	type listResponse struct {
 		Protocols []*Protocol `json:"protocols"`
 		Total     int         `json:"total"`
 	}
 	writeJSON(w, http.StatusOK, listResponse{
-		Protocols: protocols,
-		Total:     len(protocols),
+		Protocols: list,
+		Total:     len(list),
 	})
 }
 
@@ -209,11 +268,26 @@ func main() {
 	log.SetPrefix("[api] ")
 	log.Println("Starting API service on :8080")
 
+	ctx := context.Background()
+
+	brokers := strings.Split(getEnv("KAFKA_BROKERS", "kafka:9092"), ",")
+	reader := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:        brokers,
+		Topic:          "onchain.health",
+		GroupID:        "api-group",
+		MinBytes:       1,
+		MaxBytes:       1 << 20, // 1 MiB
+		CommitInterval: time.Second,
+	})
+	defer reader.Close()
+
+	log.Printf("Kafka consumer connected to %v, topic=onchain.health group=api-group", brokers)
+
+	go consumeLoop(ctx, reader)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)
 	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
-
-	// Instrumented routes.
 	mux.HandleFunc("/api/v1/protocols", instrumentedHandler("/api/v1/protocols", protocolsHandler))
 	mux.HandleFunc("/api/v1/protocols/", instrumentedHandler("/api/v1/protocols/{id}", protocolsHandler))
 

@@ -1,24 +1,44 @@
 // Package main implements the OnChain Health Monitor notifier service.
-// It simulates alerting by polling internal health scores every 5 seconds,
-// logging a formatted alert whenever a score drops below the critical threshold (30).
+// It consumes HealthEvent messages from the Kafka topic "onchain.health"
+// and fires alerts whenever a protocol score drops below the critical
+// threshold (30).
 //
 // HTTP endpoints:
-//   - GET /health  → {"status":"ok"}
-//   - GET /metrics → Real Prometheus metrics via promhttp
+//
+//   - GET /health  -> {"status":"ok"}
+//   - GET /metrics -> Real Prometheus metrics via promhttp
+//
+// Environment variables:
+//
+//   - KAFKA_BROKERS Comma-separated broker list (default: kafka:9092)
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/segmentio/kafka-go"
 )
 
 const criticalThreshold = 30
+
+// HealthEvent is the message consumed from the "onchain.health" topic.
+type HealthEvent struct {
+	ProtocolID string    `json:"protocol_id"`
+	Score      int       `json:"score"`
+	Label      string    `json:"label"`
+	PriceUSD   float64   `json:"price_usd"`
+	TVLUSD     float64   `json:"tvl_usd"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
 
 // Alert represents a triggered alert.
 type Alert struct {
@@ -27,9 +47,7 @@ type Alert struct {
 	Severity string
 	Message  string
 	FiredAt  time.Time
-	Resolved bool
 }
-
 
 // Prometheus metrics
 var (
@@ -65,24 +83,12 @@ func init() {
 	registry.MustRegister(notificationsSentTotal, lastAlertScore, notificationDuration)
 }
 
-// simulatedScores mirrors what the analyzer would publish.
-// In a real system this would be consumed from a message bus or HTTP endpoint.
-func randomScore(protocol string) int {
-	// Bias compound lower to trigger alerts more visibly.
-	base := map[string]int{
-		"uniswap":  65,
-		"aave":     70,
-		"compound": 35,
+// getEnv returns the environment variable value or a fallback.
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
 	}
-	b := base[protocol]
-	score := b + rand.Intn(31) - 15
-	if score < 0 {
-		score = 0
-	}
-	if score > 100 {
-		score = 100
-	}
-	return score
+	return fallback
 }
 
 func severity(score int) string {
@@ -95,14 +101,12 @@ func severity(score int) string {
 func sendNotification(a *Alert) {
 	start := time.Now()
 
-	// Log channel (always).
-	log.Printf("🔔 ALERT %s protocol=%s score=%d message=%q",
+	log.Printf("ALERT %s protocol=%s score=%d message=%q",
 		a.Severity, a.Protocol, a.Score, a.Message)
 	notificationsSentTotal.WithLabelValues(a.Protocol, "log").Inc()
 
-	// Simulate webhook channel for critical alerts.
 	if a.Score < 20 {
-		log.Printf("📡 WEBHOOK fired for protocol=%s score=%d", a.Protocol, a.Score)
+		log.Printf("WEBHOOK fired for protocol=%s score=%d", a.Protocol, a.Score)
 		notificationsSentTotal.WithLabelValues(a.Protocol, "webhook").Inc()
 	}
 
@@ -110,33 +114,37 @@ func sendNotification(a *Alert) {
 	notificationDuration.Observe(time.Since(start).Seconds())
 }
 
-func alertLoop() {
-	protocols := []string{"uniswap", "aave", "compound"}
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		var fired []*Alert
-		for _, p := range protocols {
-			score := randomScore(p)
-			if score < criticalThreshold {
-				a := &Alert{
-					Protocol: p,
-					Score:    score,
-					Severity: severity(score),
-					Message: fmt.Sprintf(
-						"[%s] Protocol %q health score %d/100 is below threshold %d",
-						severity(score), p, score, criticalThreshold,
-					),
-					FiredAt: time.Now().UTC(),
-				}
-				fired = append(fired, a)
-				sendNotification(a)
+// consumeLoop reads HealthEvents from Kafka and fires alerts when the score
+// drops below criticalThreshold.
+func consumeLoop(ctx context.Context, reader *kafka.Reader) {
+	for {
+		msg, err := reader.ReadMessage(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
 			}
+			log.Printf("kafka read error: %v", err)
+			continue
 		}
 
-		if len(fired) == 0 {
-			log.Printf("✅ All protocols healthy (no alerts)")
+		var he HealthEvent
+		if err := json.Unmarshal(msg.Value, &he); err != nil {
+			log.Printf("unmarshal error: %v", err)
+			continue
+		}
+
+		if he.Score < criticalThreshold {
+			sev := severity(he.Score)
+			sendNotification(&Alert{
+				Protocol: he.ProtocolID,
+				Score:    he.Score,
+				Severity: sev,
+				Message: fmt.Sprintf(
+					"[%s] Protocol %q health score %d/100 is below threshold %d",
+					sev, he.ProtocolID, he.Score, criticalThreshold,
+				),
+				FiredAt: time.Now().UTC(),
+			})
 		}
 	}
 }
@@ -151,7 +159,22 @@ func main() {
 	log.SetPrefix("[notifier] ")
 	log.Printf("Starting notifier service on :8083 (alert threshold: score < %d)", criticalThreshold)
 
-	go alertLoop()
+	ctx := context.Background()
+
+	brokers := strings.Split(getEnv("KAFKA_BROKERS", "kafka:9092"), ",")
+	reader := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:        brokers,
+		Topic:          "onchain.health",
+		GroupID:        "notifier-group",
+		MinBytes:       1,
+		MaxBytes:       1 << 20, // 1 MiB
+		CommitInterval: time.Second,
+	})
+	defer reader.Close()
+
+	log.Printf("Kafka consumer connected to %v, topic=onchain.health group=notifier-group", brokers)
+
+	go consumeLoop(ctx, reader)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)

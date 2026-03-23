@@ -270,6 +270,44 @@ Use the OpenTelemetry Collector (`otel/opentelemetry-collector-contrib:0.100.0`)
 
 ---
 
+## ADR-013: Apache Kafka as the event streaming backbone
+
+**Date:** 2026-03-23
+**Status:** Accepted
+
+**Context:**
+In Phase 1, services communicated via in-process simulated state. Each service generated its own random data independently; there was no real data flow between the collector, analyzer, notifier, and API. This was intentional for a minimal proof of concept, but it meant the system was not actually monitoring anything. Moving toward real on-chain data requires a durable, high-throughput transport layer that can handle the volume of blockchain events and decouple producers from consumers.
+
+**Decision:**
+Introduce Apache Kafka (KRaft mode, single-node) as the event streaming backbone. Two topics are used:
+
+- `onchain.events` - the collector publishes one `DeFiEvent` per protocol per tick (currently every 2 seconds, ~1.5 events/sec in mock mode, orders of magnitude more with real RPC data)
+- `onchain.health` - the analyzer publishes one `HealthEvent` per consumed `DeFiEvent`, containing the computed health score, label, price, and TVL
+
+Consumer groups:
+
+| Consumer | Topic | Group ID |
+|---|---|---|
+| analyzer | onchain.events | analyzer-group |
+| notifier | onchain.health | notifier-group |
+| api | onchain.health | api-group |
+
+The Go client used is `github.com/segmentio/kafka-go` (pure Go, no CGO dependency).
+
+KRaft mode (no ZooKeeper) is used because ZooKeeper was deprecated in Kafka 3.x and removed in Kafka 4.0. A single-node KRaft cluster is sufficient for development and staging; a multi-broker setup with replication is expected for production.
+
+**Consequences:**
+- ✅ Services are now truly decoupled: the collector, analyzer, notifier, and API each operate independently and communicate only through Kafka topics
+- ✅ Consumer group offsets allow each consumer to read at its own pace; if the notifier restarts it resumes from its last committed offset and processes no missed health events
+- ✅ Kafka's append-only log enables replay: adding a new consumer (for example an ML anomaly detector or an archiver) requires no changes to existing services
+- ✅ `segmentio/kafka-go` is pure Go with no CGO dependency, so `CGO_ENABLED=0` Docker builds are unaffected
+- ✅ KRaft removes the ZooKeeper container, keeping the Compose file manageable
+- ⚠️ Kafka adds startup time (~30s); services that depend on it use `condition: service_healthy` in docker-compose so they wait for the broker to be ready
+- ⚠️ A single-node broker with replication factor 1 has no fault tolerance; this is acceptable for development but must be addressed before production
+- ⚠️ `segmentio/kafka-go` go.mod entries are resolved at CI time via `go get` + `go mod tidy`, consistent with the existing pattern for OTel dependencies
+
+---
+
 ## ADR-012: Documentation-first approach
 
 **Date:** 2026-03-18

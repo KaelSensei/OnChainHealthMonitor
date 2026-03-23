@@ -1,6 +1,6 @@
 # OnChain Health Monitor - Roadmap
 
-## Status: 🟢 v1.0 - Core platform complete
+## Status: 🟢 v1.1 - Kafka event pipeline complete
 
 ---
 
@@ -52,19 +52,29 @@
 
 ## ✅ Milestone 6 - Documentation
 
-- [x] 11 Architecture Decision Records (ADRs)
+- [x] 12 Architecture Decision Records (ADRs) including ADR-013 for Kafka
 - [x] Technical architecture doc
 - [x] Developer onboarding guide
 - [x] Contributing guide (branch naming, commit conventions, code style)
 - [x] Local deployment guide
 - [x] Operational runbooks for each alert type
 - [x] Full API reference (OpenAPI 3.0)
-- [ ] Grafana dashboard screenshot in README _(planned v1.1)_
-- [ ] Public Statuspage URL _(planned v1.2)_
+- [ ] Grafana dashboard screenshot in README _(planned v1.2)_
+- [ ] Public Statuspage URL _(planned v1.3)_
+
+## ✅ Milestone 7 - Kafka Event Pipeline
+
+- [x] Apache Kafka (KRaft, single-node) added to Docker Compose
+- [x] `collector` publishes `DeFiEvent` to Kafka topic `onchain.events`
+- [x] `analyzer` consumes `onchain.events`, computes real health scores from price/TVL deviation, publishes `HealthEvent` to `onchain.health`
+- [x] `notifier` consumes `onchain.health` and fires alerts on real scores (no more simulated data)
+- [x] `api` consumes `onchain.health` and serves live scores (no more hardcoded state)
+- [x] Consumer groups for independent offset tracking: `analyzer-group`, `notifier-group`, `api-group`
+- [x] ADR-013 documenting the Kafka decision, topic design, and trade-offs
 
 ---
 
-## 🔜 v1.1 - Real On-Chain Data
+## 🔜 v1.2 - Real On-Chain Data
 
 - [ ] Connect `collector` to a real RPC endpoint (`MOCK_MODE=false`)
 - [ ] Support multiple chains (Ethereum mainnet, Arbitrum, Base)
@@ -72,14 +82,14 @@
 - [ ] Kubernetes deployment via Helm on CI merge
 - [ ] Grafana dashboard screenshot in README
 
-## 🔜 v1.2 - Reliability & Alerting
+## 🔜 v1.3 - Reliability & Alerting
 
 - [ ] PagerDuty / Slack webhook integration in `notifier`
 - [ ] Public Statuspage reflecting API health
 - [ ] Grafana SLO dashboards (error budget burn rate)
 - [ ] Prometheus long-term storage (Thanos sidecar or VictoriaMetrics)
 
-## 🔜 v1.3 - Log Aggregation (Loki)
+## 🔜 v1.4 - Log Aggregation (Loki)
 
 Complete the three pillars of observability - metrics (Prometheus) and traces (Jaeger) are in; logs are the missing piece.
 
@@ -89,7 +99,7 @@ Complete the three pillars of observability - metrics (Prometheus) and traces (J
 - [ ] Add log-based alerting rules (error bursts, panic detection)
 - [ ] Correlate logs ↔ traces via `trace_id` label in Loki
 
-## 🔜 v1.4 - Supply Chain Security
+## 🔜 v1.5 - Supply Chain Security
 
 - [ ] Sign container images with Cosign (Sigstore) on every release
 - [ ] Generate SBOM (CycloneDX) per service in CI and attach to GitHub releases
@@ -97,7 +107,7 @@ Complete the three pillars of observability - metrics (Prometheus) and traces (J
 - [ ] Add `golangci-lint` to CI (replaces standalone `staticcheck`)
 - [ ] Add `govulncheck` to CI to scan for known Go vulnerabilities
 
-## 🔜 v1.5 - Load Testing & SLO Validation
+## 🔜 v1.6 - Load Testing & SLO Validation
 
 - [ ] Add k6 load test suite (`tests/k6/`) targeting the Kong-proxied API
 - [ ] Smoke test (5 VUs, 30s) on every merge to main
@@ -105,14 +115,17 @@ Complete the three pillars of observability - metrics (Prometheus) and traces (J
 - [ ] Export k6 results to Prometheus remote write → Grafana dashboard for trend analysis
 - [ ] Define error budget burn rate alerts based on load test SLO targets
 
-## 🔜 v2.0 - Event-Driven Architecture
+## 🔜 v2.0 - User Subscriptions (RabbitMQ)
 
-- [ ] Replace in-process communication with a message broker (NATS JetStream)
-- [ ] `collector` publishes events to a NATS subject; `analyzer` and `notifier` subscribe
-- [ ] Cross-service trace context propagation via `traceparent` header / NATS message headers
-- [ ] WebSocket endpoint for real-time protocol health updates
+Kafka handles the data pipeline. RabbitMQ handles per-user routing: each user subscribes to specific protocols and thresholds, and receives targeted alerts via WebSocket.
+
+- [ ] RabbitMQ added to Docker Compose alongside Kafka (topic exchanges for per-user routing)
+- [ ] Subscription model: users define `{protocol, threshold}` pairs stored in a database
+- [ ] `notifier` publishes to RabbitMQ when a health score crosses a user subscription threshold
+- [ ] WebSocket server bridges RabbitMQ queues to connected browser clients
+- [ ] Next.js dashboard with real-time protocol health feed and subscription management UI
 - [ ] Historical health score API (`GET /api/v1/protocols/{id}/history`)
-- [ ] Redis for shared state and score caching (removes in-memory state from individual services)
+- [ ] Cross-service trace context propagation via Kafka and RabbitMQ message headers
 
 ## 🔜 v2.1 - Real On-Chain Indexing
 

@@ -12,29 +12,33 @@ The design philosophy: **functionally simple, architecturally serious.** The dom
 
 ```mermaid
 graph TD
-    subgraph External["🌐 External Traffic"]
+    subgraph External["External Traffic"]
         Client([Client / Browser])
     end
 
-    subgraph Gateway["🦍 API Gateway"]
+    subgraph Gateway["API Gateway"]
         Kong["Kong\n:8000 proxy\n:8001 admin"]
     end
 
-    subgraph Services["⚙️ Go Microservices"]
-        Collector["collector\n:8081\nMock DeFi events"]
-        Analyzer["analyzer\n:8082\nHealth scoring"]
-        Notifier["notifier\n:8083\nAlerting"]
+    subgraph Broker["Message Broker"]
+        Kafka["Kafka (KRaft)\n:9092\nonchain.events\nonchain.health"]
+    end
+
+    subgraph Services["Go Microservices"]
+        Collector["collector\n:8081\nDeFi event producer"]
+        Analyzer["analyzer\n:8082\nHealth score computation"]
+        Notifier["notifier\n:8083\nAlert engine"]
         API["api\n:8080\nREST API"]
     end
 
-    subgraph Observability["📊 Observability Stack"]
+    subgraph Observability["Observability Stack"]
         Prometheus["Prometheus\n:9090"]
         Grafana["Grafana\n:3000"]
         OtelCollector["OTel Collector\n:4317"]
         Jaeger["Jaeger\n:16686"]
     end
 
-    subgraph Docs["📋 API Docs"]
+    subgraph Docs["API Docs"]
         Swagger["Swagger UI\n:8090"]
     end
 
@@ -42,14 +46,14 @@ graph TD
     Kong -->|"proxy"| API
     Kong -->|"/swagger"| Swagger
 
-    Collector -->|"mock events"| Analyzer
-    Analyzer -->|"scores"| Notifier
-    API -->|"reads scores"| Analyzer
+    Collector -->|"publish DeFiEvent\nonchain.events"| Kafka
+    Kafka -->|"consume DeFiEvent\nanalyzer-group"| Analyzer
+    Analyzer -->|"publish HealthEvent\nonchain.health"| Kafka
+    Kafka -->|"consume HealthEvent\nnotifier-group"| Notifier
+    Kafka -->|"consume HealthEvent\napi-group"| API
 
     Collector -->|"OTLP gRPC"| OtelCollector
     Analyzer -->|"OTLP gRPC"| OtelCollector
-    Notifier -->|"OTLP gRPC"| OtelCollector
-    API -->|"OTLP gRPC"| OtelCollector
     OtelCollector -->|"OTLP"| Jaeger
 
     Prometheus -->|"scrape /metrics"| Collector
@@ -65,12 +69,12 @@ graph TD
 
 ## Data Flow
 
-### Phase 1 (current) - Mock pipeline
-
 ```mermaid
 sequenceDiagram
     participant C as collector
+    participant KE as Kafka<br/>onchain.events
     participant A as analyzer
+    participant KH as Kafka<br/>onchain.health
     participant N as notifier
     participant API as api
     participant K as Kong
@@ -80,17 +84,29 @@ sequenceDiagram
     participant G as Grafana
     participant CL as Client
 
-    loop Every 2 seconds
-        C->>C: Generate mock DeFi event<br/>(price, TVL, protocol_event)
-        C->>OC: Export trace span (generate_event)
-        C->>A: Emit event data
-        A->>A: Compute health score (0–100)
-        A->>OC: Export trace span (analyze_protocol)
+    loop Every 2 seconds (per protocol)
+        C->>C: Generate DeFiEvent (price, TVL, event_type)
+        C->>OC: Export span: generate_event
+        C->>KE: Publish DeFiEvent (key=protocol_id)
+    end
+
+    loop On every message (analyzer-group)
+        KE->>A: Consume DeFiEvent
+        A->>A: Compute health score from price/TVL deviation
+        A->>OC: Export span: analyze_protocol
+        A->>KH: Publish HealthEvent (score, label, price, tvl)
+    end
+
+    loop On every message (notifier-group)
+        KH->>N: Consume HealthEvent
         alt score < 30
-            A->>N: Trigger alert
-            N->>N: Log 🔔 ALERT
-            N->>OC: Export trace span (send_notification)
+            N->>N: Log ALERT (WARNING or CRITICAL)
         end
+    end
+
+    loop On every message (api-group)
+        KH->>API: Consume HealthEvent
+        API->>API: Update in-memory protocol state
     end
 
     loop Every 15 seconds
@@ -102,27 +118,12 @@ sequenceDiagram
 
     CL->>K: GET /api/v1/protocols
     K->>API: Proxy request (rate limit check)
-    API->>API: Return protocol list with health scores
-    API->>OC: Export trace span (GET /api/v1/protocols)
-    API->>K: Response
+    API->>K: Response (live scores from last HealthEvent)
     K->>CL: Response + X-Request-ID header
 
     OC->>J: Forward traces (batch)
     G->>P: Query PromQL
     G->>J: Query traces
-```
-
-> **Note:** In Phase 1, inter-service communication is simulated in-process (each service maintains its own state). Real cross-service calls (HTTP or message queue) are planned for Phase 2.
-
-### Future (Phase 2+) - Real pipeline
-
-```
-Collector  →  (RPC_ENDPOINT + MOCK_MODE=false)  →  real blockchain events
-           →  publishes to internal HTTP or message queue
-Analyzer   →  consumes events from Collector HTTP endpoint
-           →  propagates OpenTelemetry trace context across service boundaries
-Notifier   →  subscribes to Analyzer health score updates
-API        →  reads from Analyzer (or shared store)
 ```
 
 ---
@@ -134,9 +135,9 @@ API        →  reads from Analyzer (or shared store)
 | Property | Value |
 |----------|-------|
 | Port | `8081` |
-| Role | Ingests DeFi protocol data; in mock mode, emits fake events |
+| Role | Ingests DeFi protocol data and publishes events to Kafka |
 | Inputs | None in mock mode; RPC endpoint in real mode |
-| Outputs | JSON event log to stdout; current state on `/metrics` |
+| Outputs | `DeFiEvent` messages on `onchain.events`; metrics on `/metrics` |
 
 **Endpoints:**
 
@@ -151,8 +152,8 @@ API        →  reads from Analyzer (or shared store)
   - Price: random walk ±2% per tick, clamped to ±20% of baseline
   - TVL: random walk ±1% per tick, clamped to ±20% of baseline
   - Event type: one of `price_update`, `tvl_change`, `swap`, `liquidation`, `deposit`
-  - Volume: 1–5% of current TVL
-- Events are JSON-encoded to `log.Writer()` (stdout)
+  - Volume: 1-5% of current TVL
+- Each `DeFiEvent` is published to Kafka topic `onchain.events` with `protocol_id` as the key
 
 **Baseline values:**
 
@@ -169,9 +170,9 @@ API        →  reads from Analyzer (or shared store)
 | Property | Value |
 |----------|-------|
 | Port | `8082` |
-| Role | Computes a health score (0–100) per protocol |
-| Inputs | Protocol state (simulated in Phase 1; Collector events in Phase 2) |
-| Outputs | Health scores on `/metrics`; will feed API and Notifier |
+| Role | Consumes `DeFiEvent` messages, computes health scores, publishes `HealthEvent` messages |
+| Inputs | `DeFiEvent` messages from Kafka topic `onchain.events` (consumer group `analyzer-group`) |
+| Outputs | `HealthEvent` messages on Kafka topic `onchain.health`; metrics on `/metrics` |
 
 **Endpoints:**
 
@@ -180,15 +181,28 @@ API        →  reads from Analyzer (or shared store)
 | `GET` | `/health` | Liveness check → `{"status":"ok"}` |
 | `GET` | `/metrics` | Prometheus gauge: `analyzer_health_score{protocol="..."}` |
 
+**Score computation:**
+
+The health score maps price and TVL deviation from their baselines to a 0-100 scale:
+
+- Score 50 when price and TVL are exactly at baseline
+- Score 100 when both are at +20% of baseline
+- Score 0 when both are at -20% of baseline
+- Liquidation events apply an additional -10 penalty
+
+```
+priceNorm = clamp((price - baseline*0.8) / (baseline*0.4), 0, 1)
+tvlNorm   = clamp((tvl   - baseline*0.8) / (baseline*0.4), 0, 1)
+score     = int((priceNorm*0.5 + tvlNorm*0.5) * 100)
+```
+
 **Score labels:**
 
 | Score range | Label |
 |-------------|-------|
-| 70–100 | `healthy` |
-| 40–69 | `degraded` |
-| 0–39 | `critical` |
-
-**Simulation:** `analyzeLoop` runs every 3 seconds, applying a random delta of ±5 to each protocol's score, clamped to [0, 100].
+| 70-100 | `healthy` |
+| 40-69 | `degraded` |
+| 0-39 | `critical` |
 
 ---
 
@@ -197,8 +211,8 @@ API        →  reads from Analyzer (or shared store)
 | Property | Value |
 |----------|-------|
 | Port | `8083` |
-| Role | Fires alerts when a protocol's health score drops below threshold |
-| Inputs | Simulated health scores (mirrors Analyzer logic in Phase 1) |
+| Role | Consumes `HealthEvent` messages and fires alerts when scores drop below threshold |
+| Inputs | `HealthEvent` messages from Kafka topic `onchain.health` (consumer group `notifier-group`) |
 | Outputs | Alert log to stdout; `notifier_alerts_total` counter on `/metrics` |
 
 **Endpoints:**
@@ -209,10 +223,9 @@ API        →  reads from Analyzer (or shared store)
 | `GET` | `/metrics` | Prometheus counter: `notifier_alerts_total` |
 
 **Alert logic:**
-- `alertLoop` runs every 5 seconds
-- Critical threshold: `score < 30`
-- Severity levels: `WARNING` (score 20–29), `CRITICAL` (score < 20)
-- Compound is biased lower (base score 35) to produce visible alerts during demos
+- Fires on every `HealthEvent` message where `score < 30`
+- Severity levels: `WARNING` (score 20-29), `CRITICAL` (score < 20)
+- A webhook channel is simulated for `CRITICAL` severity (score < 20)
 - Future: real integrations with PagerDuty, Slack, or Grafana Alerting webhooks
 
 ---
@@ -223,7 +236,7 @@ API        →  reads from Analyzer (or shared store)
 |----------|-------|
 | Port | `8080` |
 | Role | Exposes protocol health data to external consumers |
-| Inputs | In-memory protocol state (will read from Analyzer in Phase 2) |
+| Inputs | `HealthEvent` messages from Kafka topic `onchain.health` (consumer group `api-group`) |
 | Outputs | JSON REST responses |
 
 **Endpoints:**
@@ -354,6 +367,7 @@ All containers share a default bridge network created by Docker Compose. Service
 
 ```
 Docker bridge network: onchain_network
+  ├── kafka          (onchain_kafka)           :9092 → host:9092
   ├── collector      (onchain_collector)       :8081 → host:8081
   ├── analyzer       (onchain_analyzer)        :8082 → host:8082
   ├── notifier       (onchain_notifier)        :8083 → host:8083
@@ -370,9 +384,8 @@ Docker bridge network: onchain_network
 - `grafana_data` - persists Grafana state (dashboards, users) across restarts
 
 **Startup dependencies (Docker Compose `depends_on`):**
-- `analyzer` depends on `collector`
-- `notifier` depends on `analyzer`
-- `api` depends on `analyzer`
+- `collector`, `analyzer`, `notifier`, `api` all depend on `kafka` with `condition: service_healthy`
+- Kafka uses a 30s `start_period` healthcheck because the broker takes ~30s to be ready
 - `grafana` depends on `prometheus`
 
 ---
@@ -383,44 +396,31 @@ Docker bridge network: onchain_network
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `KAFKA_BROKERS` | `kafka:9092` | Comma-separated list of Kafka broker addresses |
 | `MOCK_MODE` | `true` | Set `false` to connect to a real RPC endpoint |
 | `RPC_ENDPOINT` | _(none)_ | Blockchain RPC URL (used when `MOCK_MODE=false`) |
-| `EMIT_INTERVAL_MS` | `2000` | Milliseconds between mock event emission cycles |
-| `PORT` | `8081` | HTTP server port |
-| `LOG_LEVEL` | `info` | Logging verbosity |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `otel-collector:4317` | OTLP gRPC endpoint for trace export (set in docker-compose) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `otel-collector:4317` | OTLP gRPC endpoint for trace export |
 
 ### `analyzer`
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `COLLECTOR_URL` | `http://collector:8081` | Base URL of the collector service |
-| `ANALYZE_INTERVAL_MS` | `3000` | Milliseconds between analysis cycles |
-| `PORT` | `8082` | HTTP server port |
-| `LOG_LEVEL` | `info` | Logging verbosity |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `otel-collector:4317` | OTLP gRPC endpoint for trace export (set in docker-compose) |
+| `KAFKA_BROKERS` | `kafka:9092` | Comma-separated list of Kafka broker addresses |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `otel-collector:4317` | OTLP gRPC endpoint for trace export |
 
 ### `notifier`
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ANALYZER_URL` | `http://analyzer:8082` | Base URL of the analyzer service |
-| `ALERT_THRESHOLD` | `30` | Score below which an alert fires |
-| `POLL_INTERVAL_MS` | `5000` | Milliseconds between alert checks |
-| `PORT` | `8083` | HTTP server port |
-| `WEBHOOK_URL` | _(none)_ | Optional: Slack/PagerDuty webhook for real notifications |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `otel-collector:4317` | OTLP gRPC endpoint for trace export (set in docker-compose) |
+| `KAFKA_BROKERS` | `kafka:9092` | Comma-separated list of Kafka broker addresses |
 
 ### `api`
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ANALYZER_URL` | `http://analyzer:8082` | Base URL of the analyzer service |
-| `PORT` | `8080` | HTTP server port |
-| `LOG_LEVEL` | `info` | Logging verbosity |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `otel-collector:4317` | OTLP gRPC endpoint for trace export (set in docker-compose) |
+| `KAFKA_BROKERS` | `kafka:9092` | Comma-separated list of Kafka broker addresses |
 
-> **Note:** `OTEL_EXPORTER_OTLP_ENDPOINT` is set for all four services in `docker-compose.yml`. Other variables are compiled in as defaults for Phase 1; runtime override support is planned for Phase 2.
+> All four services read `KAFKA_BROKERS` from the environment. The value is set to `kafka:9092` in `docker-compose.yml` and should point to the broker list for your environment.
 
 ---
 
