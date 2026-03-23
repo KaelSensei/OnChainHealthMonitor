@@ -31,7 +31,10 @@ jobs:
           cache-dependency-path: services/notifier/go.sum
       - name: Tidy modules
         run: |
-          go get github.com/segmentio/kafka-go@latest
+          go get \
+            github.com/segmentio/kafka-go@latest \
+            github.com/rabbitmq/amqp091-go@latest \
+            github.com/redis/go-redis/v9@latest
           go mod tidy
       - name: Install staticcheck
         run: go install honnef.co/go/tools/cmd/staticcheck@latest

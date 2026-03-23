@@ -1,7 +1,7 @@
 version: "3.9"
 
 services:
-  # ── Message Broker ───────────────────────────────────────────────────────────
+  # ── Message Brokers & Cache ──────────────────────────────────────────────────
 
   kafka:
     image: bitnami/kafka:3.7
@@ -25,6 +25,38 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    networks:
+      - onchain_network
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: onchain_rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=onchain
+      - RABBITMQ_DEFAULT_PASS=onchain
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - onchain_network
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: onchain_redis
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     networks:
       - onchain_network
 
@@ -93,13 +125,45 @@ services:
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
       - KAFKA_BROKERS=kafka:9092
+      - REDIS_ADDR=redis:6379
+      - RABBITMQ_URL=amqp://onchain:onchain@rabbitmq:5672/
     labels:
       - "prometheus.scrape=true"
     depends_on:
       kafka:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8083/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - onchain_network
+
+  subscription:
+    build:
+      context: ./services/subscription
+      dockerfile: Dockerfile
+    container_name: onchain_subscription
+    ports:
+      - "8084:8084"
+    restart: unless-stopped
+    environment:
+      - REDIS_ADDR=redis:6379
+      - RABBITMQ_URL=amqp://onchain:onchain@rabbitmq:5672/
+    labels:
+      - "prometheus.scrape=true"
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8084/health"]
       interval: 10s
       timeout: 5s
       retries: 3
