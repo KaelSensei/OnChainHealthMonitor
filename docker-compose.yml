@@ -223,6 +223,25 @@ services:
       timeout: 10s
       retries: 3
 
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: onchain_dashboard
+    ports:
+      - "3001:3001"
+    restart: unless-stopped
+    environment:
+      - API_URL=http://api:8080
+      - SUBSCRIPTION_URL=http://subscription:8084
+    depends_on:
+      api:
+        condition: service_healthy
+      subscription:
+        condition: service_healthy
+    networks:
+      - onchain_network
+
   swagger-ui:
     image: swaggerapi/swagger-ui:v5.17.14
     container_name: onchain_swagger

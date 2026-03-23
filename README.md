@@ -13,6 +13,8 @@
 [![CI - collector](https://github.com/KaelSensei/OnChainHealthMonitor/actions/workflows/ci-collector.yml/badge.svg)](https://github.com/KaelSensei/OnChainHealthMonitor/actions/workflows/ci-collector.yml)
 [![CI - analyzer](https://github.com/KaelSensei/OnChainHealthMonitor/actions/workflows/ci-analyzer.yml/badge.svg)](https://github.com/KaelSensei/OnChainHealthMonitor/actions/workflows/ci-analyzer.yml)
 [![CI - notifier](https://github.com/KaelSensei/OnChainHealthMonitor/actions/workflows/ci-notifier.yml/badge.svg)](https://github.com/KaelSensei/OnChainHealthMonitor/actions/workflows/ci-notifier.yml)
+[![CI - subscription](https://github.com/KaelSensei/OnChainHealthMonitor/actions/workflows/ci-subscription.yml/badge.svg)](https://github.com/KaelSensei/OnChainHealthMonitor/actions/workflows/ci-subscription.yml)
+[![CI - dashboard](https://github.com/KaelSensei/OnChainHealthMonitor/actions/workflows/ci-dashboard.yml/badge.svg)](https://github.com/KaelSensei/OnChainHealthMonitor/actions/workflows/ci-dashboard.yml)
 
 ---
 
@@ -21,7 +23,11 @@
 ```mermaid
 graph TD
     subgraph External["External Traffic"]
-        Client([Client / Browser])
+        Browser([Browser])
+    end
+
+    subgraph Frontend["Frontend"]
+        Dashboard["dashboard\n:3001\nNext.js App Router"]
     end
 
     subgraph Gateway["API Gateway"]
@@ -56,7 +62,11 @@ graph TD
         Swagger["Swagger UI\n:8090"]
     end
 
-    Client -->|"HTTP :8000"| Kong
+    Browser -->|"HTTP :3001"| Dashboard
+    Dashboard -->|"server-side proxy"| API
+    Dashboard -->|"server-side proxy"| Subscription
+    Browser -->|"WebSocket :8084"| Subscription
+    Browser -->|"HTTP :8000"| Kong
     Kong -->|"proxy"| API
     Kong -->|"/swagger"| Swagger
 
@@ -98,10 +108,11 @@ sequenceDiagram
     participant RMQ as RabbitMQ onchain.alerts
     participant SUB as subscription
     participant WS as WebSocket Client
+    participant DASH as dashboard
     participant API as api
     participant K as Kong
     participant P as Prometheus
-    participant CL as Client
+    participant CL as Browser
 
     loop Every 2s per protocol
         C->>C: Generate DeFiEvent (price, TVL, event_type)
@@ -143,7 +154,19 @@ sequenceDiagram
         P->>API: Scrape /metrics
     end
 
-    CL->>K: GET /api/v1/protocols
+    CL->>DASH: GET / (initial page load)
+    DASH->>API: Server-side fetch /api/v1/protocols
+    API-->>DASH: Protocol list (live scores)
+    DASH-->>CL: Rendered HTML with protocol cards
+
+    loop Every 5s (client-side polling)
+        CL->>DASH: GET /api/protocols (Next.js route handler)
+        DASH->>API: Proxy request
+        API-->>DASH: Updated scores
+        DASH-->>CL: JSON response
+    end
+
+    CL->>K: GET /api/v1/protocols (direct API access)
     K->>API: Proxy (rate limit check)
     API->>K: Live scores from last HealthEvent
     K->>CL: Response + X-Request-ID
@@ -160,6 +183,7 @@ sequenceDiagram
 | `notifier`     | 8083 | Consumes `onchain.health`, fires alerts when score drops below 30           |
 | `api`          | 8080 | Consumes `onchain.health`, serves live protocol data via REST               |
 | `subscription` | 8084 | Manages user subscriptions (CRUD + Redis), delivers real-time alerts via WebSocket (RabbitMQ) |
+| `dashboard`    | 3001 | Next.js App Router UI: protocol health feed, subscription management, real-time alert stream |
 
 All services expose:
 - `GET /health` → `{"status":"ok"}` for liveness checks
@@ -171,7 +195,8 @@ All services expose:
 
 | Theme                      | Tool                        | Why                                                      |
 |----------------------------|-----------------------------|----------------------------------------------------------|
-| Language                   | Go 1.22                     | Fast, minimal stdlib, perfect for microservices          |
+| Language (backend)         | Go 1.22                     | Fast, minimal stdlib, perfect for microservices          |
+| Language (frontend)        | TypeScript + Next.js 14     | App Router enables SSR for initial data; client components for real-time updates; API routes as BFF proxy |
 | Message Broker             | Apache Kafka (KRaft)        | High-throughput event streaming; decouples all services; replay support |
 | User notification routing  | RabbitMQ                    | Topic exchange pattern routes alerts to specific users; auto-delete queues per connected client |
 | Subscription storage       | Redis                       | Fast set-based lookup by protocol; per-user subscription index |
@@ -205,7 +230,7 @@ See [Infrastructure Guide](docs/deployment/INFRASTRUCTURE_GUIDE.md) for full det
 git clone https://github.com/KaelSensei/OnChainHealthMonitor.git
 cd OnChainHealthMonitor
 
-# Start the full stack (builds all 4 services + spins up Prometheus, Grafana, Jaeger)
+# Start the full stack
 docker-compose up --build
 
 # In another terminal, verify services
@@ -214,6 +239,10 @@ curl http://localhost:8080/api/v1/protocols # Protocol list
 curl http://localhost:8081/health           # Collector
 curl http://localhost:8082/health           # Analyzer
 curl http://localhost:8083/health           # Notifier
+curl http://localhost:8084/health           # Subscription
+
+# Dashboard
+open http://localhost:3001   # Next.js dashboard
 
 # Observability UIs
 open http://localhost:9090   # Prometheus
@@ -291,7 +320,9 @@ OnChainHealthMonitor/
 │   ├── collector/     # DeFi event ingestion + HTTP server
 │   ├── analyzer/      # Health score computation
 │   ├── notifier/      # Alert engine
-│   └── api/           # Public REST API
+│   ├── api/           # Public REST API
+│   └── subscription/  # Subscription CRUD + WebSocket alert delivery
+├── dashboard/         # Next.js 14 frontend (protocol health + subscriptions)
 ├── infra/
 │   ├── terraform/     # GCP/GKE infrastructure as code
 │   ├── helm/          # Helm charts per service
@@ -328,6 +359,8 @@ graph LR
         Static["staticcheck"]
         Test["go test -race"]
         Build["go build"]
+        NpmLint["npm run lint"]
+        NpmBuild["npm run build"]
         Docker["docker build\n+ push GHCR"]
     end
 
@@ -338,13 +371,14 @@ graph LR
     end
 
     subgraph Release["Release on tag v*.*.*"]
-        Matrix["matrix build\ncollector / analyzer\nnotifier / api"]
+        Matrix["matrix build\ncollector / analyzer\nnotifier / api\nsubscription / dashboard"]
         GHCR[("ghcr.io/kaelsensei\n/onchainhealthmonitor")]
     end
 
     Commit --> CommitLint
     Commit --> MDLint
     Commit --> Vet --> Static --> Test --> Build --> Docker
+    Commit --> NpmLint --> NpmBuild --> Docker
     Commit --> Compose
     Commit --> Kong
     Commit --> OApi

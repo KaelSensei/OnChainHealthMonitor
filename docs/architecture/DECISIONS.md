@@ -391,3 +391,40 @@ Redis is configured with `maxmemory 256mb` and `allkeys-lru` eviction policy. Su
 - ✅ `github.com/redis/go-redis/v9` is the maintained community standard client for Go
 - ⚠️ Subscriptions are not persisted to disk by default (no RDB or AOF configured); a Redis restart loses all subscriptions. This is acceptable for the current scope; persistence can be enabled via `redis.conf` when needed
 - ⚠️ The set-based lookup means the notifier fetches each subscription individually after the SMEMBERS call (N+1 pattern). For the current scale (tens to hundreds of subscriptions per protocol) this is negligible; a Redis Hash or Lua script can optimise this if needed
+
+---
+
+## ADR-016: Next.js 14 App Router for the frontend dashboard
+
+**Status:** Accepted
+
+**Context:**
+The project needs a browser UI to make the event-driven pipeline observable to non-technical users. The UI has three distinct concerns: (1) displaying live protocol health scores (updated every few seconds), (2) managing user subscriptions (REST CRUD), and (3) receiving real-time push alerts (WebSocket). These concerns map naturally to a combination of server-side rendering and interactive client components.
+
+Alternatives considered:
+
+| Option | Rejected because |
+|---|---|
+| React + Vite SPA | All data fetching client-side; no server-side rendering; CORS headers needed on Go services |
+| Vue 3 + Nuxt | Team is TypeScript-first; React ecosystem better aligned with existing skills |
+| Plain HTML + fetch | No component model; acceptable for a demo but does not demonstrate modern frontend patterns |
+
+**Decision:**
+Use Next.js 14 with the App Router and Tailwind CSS.
+
+Key design choices:
+
+- **Server component for initial render** (`app/page.tsx`) fetches protocols from the Go API server-side at request time, so the page renders with live scores on first load without a client-side loading state.
+- **Next.js API route handlers as BFF proxy** (`/api/protocols`, `/api/subscriptions/*`) forward REST calls to the Go services. This keeps all service URLs as server-side environment variables (`API_URL`, `SUBSCRIPTION_URL`) and eliminates the need to configure CORS on any Go service.
+- **WebSocket connects browser-direct** to the subscription service on port 8084 (`ws://{hostname}:8084/ws`). Proxying WebSocket through Next.js would require a custom server and is not worth the complexity for this scope.
+- **User identity via localStorage UUID** - no authentication layer required; a random UUID is generated on first visit and persisted, giving each browser session a stable user ID for subscription management.
+- **Port 3001** - port 3000 is already occupied by Grafana in the Compose stack.
+- **Standalone output** (`output: 'standalone'` in `next.config.ts`) - produces a self-contained Node.js server without `node_modules`, keeping the Docker image small.
+
+**Consequences:**
+- ✅ Initial page load delivers a fully rendered protocol grid with no loading flash
+- ✅ No CORS configuration needed on Go services; API and subscription URLs are runtime env vars
+- ✅ Tailwind CSS keeps the styling portable and the bundle small (purged at build time)
+- ✅ Standalone Docker output means the runtime image is `node:20-alpine` + a ~50MB `.next/standalone` directory
+- ⚠️ WebSocket URL is derived from `window.location.hostname` at runtime; in a production deployment behind a reverse proxy, port 8084 must be exposed or the WebSocket traffic routed through the proxy
+- ⚠️ Protocol polling is client-side every 5 s; at scale, server-sent events or a Next.js streaming response would be more efficient
