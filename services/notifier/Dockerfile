@@ -3,8 +3,12 @@ FROM golang:1.23-alpine AS builder
 
 WORKDIR /app
 COPY go.mod ./
+RUN go get \
+    github.com/segmentio/kafka-go@latest \
+    github.com/rabbitmq/amqp091-go@latest \
+    github.com/redis/go-redis/v9@latest
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o notifier .
+RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o notifier .
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM alpine:3.19
