@@ -326,3 +326,68 @@ Treat documentation as a first-class deliverable. Every tool has an ADR. Every a
 - ✅ A well-documented repo is easier to contribute to, fork, and extend
 - ⚠️ Documentation requires maintenance: ADRs can go stale if not updated when decisions change
 - ⚠️ Writing good docs takes real time - it should be planned as part of every feature, not squeezed in at the end
+
+---
+
+## ADR-014: RabbitMQ for per-user alert routing
+
+**Date:** 2026-03-23
+**Status:** Accepted
+
+**Context:**
+Kafka handles the high-volume event pipeline efficiently, but it is a poor fit for per-user notification delivery. Kafka topics are append-only logs consumed by groups; there is no native mechanism to route a single message to a specific user without giving every user their own topic or using application-level filtering at the consumer. For user subscriptions where each user receives only the alerts matching their `{protocol, threshold}` preferences, a message broker with flexible routing is a better tool.
+
+**Decision:**
+Use RabbitMQ with a topic exchange (`onchain.alerts`, durable) for per-user alert routing.
+
+Routing design:
+- The notifier publishes `AlertMessage` payloads with routing key `user.{user_id}` whenever a HealthEvent crosses a user's subscribed threshold.
+- The subscription service declares a per-user queue (`alerts.{user_id}`, auto-delete) and binds it to the exchange with binding key `user.{user_id}`.
+- WebSocket connections in the subscription service consume from this queue and push JSON alerts to the browser.
+- When all WebSocket connections for a user close, the auto-delete queue is removed automatically.
+
+The Go AMQP client used is `github.com/rabbitmq/amqp091-go` (the official maintained fork of the original `streadway/amqp`).
+
+**Why RabbitMQ alongside Kafka rather than Kafka alone:**
+
+Kafka could theoretically route per-user messages using a topic-per-user pattern, but that does not scale: thousands of users means thousands of topics, each with its own partition metadata and log segments. Kafka is optimised for a small number of high-throughput topics, not for a large number of low-traffic per-entity queues. RabbitMQ's exchange-and-binding model is designed exactly for this routing pattern and handles queue-per-user efficiently.
+
+**Consequences:**
+- ✅ Per-user routing is expressed as a RabbitMQ binding: no application-level filtering needed in the consumer
+- ✅ Auto-delete queues reclaim resources automatically when users disconnect - no manual cleanup
+- ✅ Multiple WebSocket connections for the same user (multiple browser tabs) share one queue and each receives every alert
+- ✅ If no WebSocket is connected for a user, the message is simply dropped - no backlog accumulates (acceptable for real-time alerts)
+- ✅ `amqp091-go` is pure Go and does not affect CGO_ENABLED=0 Docker builds
+- ⚠️ A single RabbitMQ node has no replication; this is acceptable for development but requires a clustered setup with quorum queues for production
+- ⚠️ The notifier now has three external dependencies (Kafka, Redis, RabbitMQ); all three must be healthy before the service starts
+
+---
+
+## ADR-015: Redis for subscription storage
+
+**Date:** 2026-03-23
+**Status:** Accepted
+
+**Context:**
+User subscriptions (a `{user_id, protocol_id, threshold}` triple) need to be stored durably and queried efficiently by two services: the subscription service (CRUD) and the notifier (lookup by protocol at alert time). A relational database would introduce schema migrations and an ORM dependency; a document store adds operational overhead. Given the simple key-value nature of the data and the need for fast set-based lookup by protocol, Redis is a natural fit.
+
+**Decision:**
+Use Redis 7.2 as the subscription store with the following key schema:
+
+| Key | Type | Content |
+|---|---|---|
+| `sub:{id}` | String | JSON-serialised `Subscription` |
+| `user_subs:{user_id}` | Set | Set of subscription IDs belonging to a user |
+| `proto_subs:{protocol_id}` | Set | Set of subscription IDs watching a protocol |
+
+Creating a subscription writes to all three structures atomically via a Redis pipeline. Deleting does the same in reverse. The notifier queries `proto_subs:{protocol_id}` (a single SMEMBERS call) then fetches each matching subscription by ID to check the threshold.
+
+Redis is configured with `maxmemory 256mb` and `allkeys-lru` eviction policy. Subscription data is small (a few hundred bytes per entry) so eviction under normal load is unlikely, but the policy ensures the container does not OOM under pathological conditions.
+
+**Consequences:**
+- ✅ SMEMBERS on `proto_subs:{protocol_id}` gives the notifier O(n) subscription lookup with a single round-trip
+- ✅ Pipeline-based writes make create and delete operations atomic from the client's perspective
+- ✅ Redis 7.2 Alpine is a ~30MB image with a minimal attack surface
+- ✅ `github.com/redis/go-redis/v9` is the maintained community standard client for Go
+- ⚠️ Subscriptions are not persisted to disk by default (no RDB or AOF configured); a Redis restart loses all subscriptions. This is acceptable for the current scope; persistence can be enabled via `redis.conf` when needed
+- ⚠️ The set-based lookup means the notifier fetches each subscription individually after the SMEMBERS call (N+1 pattern). For the current scale (tens to hundreds of subscriptions per protocol) this is negligible; a Redis Hash or Lua script can optimise this if needed

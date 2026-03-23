@@ -30,40 +30,6 @@ func TestSeverity(t *testing.T) {
 	}
 }
 
-// --- randomScore ---
-
-func TestRandomScore_InRange(t *testing.T) {
-	protocols := []string{"uniswap", "aave", "compound"}
-	for _, p := range protocols {
-		for i := 0; i < 500; i++ {
-			got := randomScore(p)
-			if got < 0 || got > 100 {
-				t.Errorf("randomScore(%q) = %d, want [0, 100]", p, got)
-			}
-		}
-	}
-}
-
-func TestRandomScore_UnknownProtocol(t *testing.T) {
-	// Unknown protocol has base 0 → score should still be in [0, 100]
-	for i := 0; i < 200; i++ {
-		got := randomScore("unknown")
-		if got < 0 || got > 100 {
-			t.Errorf("randomScore(\"unknown\") = %d, want [0, 100]", got)
-		}
-	}
-}
-
-func TestRandomScore_ProducesVariation(t *testing.T) {
-	seen := map[int]bool{}
-	for i := 0; i < 200; i++ {
-		seen[randomScore("uniswap")] = true
-	}
-	if len(seen) < 2 {
-		t.Error("randomScore(\"uniswap\") returned the same value every time — expected variation")
-	}
-}
-
 // --- criticalThreshold ---
 
 func TestCriticalThreshold_Value(t *testing.T) {
@@ -72,22 +38,21 @@ func TestCriticalThreshold_Value(t *testing.T) {
 	}
 }
 
-// --- sendNotification ---
+// --- sendSystemAlert ---
 
-func TestSendNotification_UpdatesMetrics(t *testing.T) {
+func TestSendSystemAlert_UpdatesMetrics(t *testing.T) {
 	a := &Alert{
-		Protocol:  "uniswap",
-		Score:     25,
-		Severity:  severity(25),
-		Message:   "test alert",
-		FiredAt:   time.Now().UTC(),
-		Resolved:  false,
+		Protocol: "uniswap",
+		Score:    25,
+		Severity: severity(25),
+		Message:  "test alert",
+		FiredAt:  time.Now().UTC(),
 	}
 	// Should not panic; Prometheus metrics updated internally.
-	sendNotification(a)
+	sendSystemAlert(a)
 }
 
-func TestSendNotification_CriticalWebhook(t *testing.T) {
+func TestSendSystemAlert_CriticalWebhook(t *testing.T) {
 	a := &Alert{
 		Protocol: "compound",
 		Score:    10, // < 20 triggers webhook log
@@ -96,7 +61,7 @@ func TestSendNotification_CriticalWebhook(t *testing.T) {
 		FiredAt:  time.Now().UTC(),
 	}
 	// Should not panic; webhook channel logged internally.
-	sendNotification(a)
+	sendSystemAlert(a)
 }
 
 // --- healthHandler ---

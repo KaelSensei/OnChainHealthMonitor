@@ -71,6 +71,11 @@
 - [x] `api` consumes `onchain.health` and serves live scores (no more hardcoded state)
 - [x] Consumer groups for independent offset tracking: `analyzer-group`, `notifier-group`, `api-group`
 - [x] ADR-013 documenting the Kafka decision, topic design, and trade-offs
+- [x] RabbitMQ topic exchange (onchain.alerts) for per-user alert routing
+- [x] Redis subscription store with three-index key schema (`sub:{id}`, `user_subs:{user_id}`, `proto_subs:{protocol_id}`)
+- [x] `subscription` service: CRUD REST API + WebSocket real-time alert delivery
+- [x] `notifier` updated to route matching alerts to RabbitMQ based on Redis subscriptions
+- [x] ADR-014 (RabbitMQ) and ADR-015 (Redis) documenting the routing and storage decisions
 
 ---
 
@@ -115,17 +120,10 @@ Complete the three pillars of observability - metrics (Prometheus) and traces (J
 - [ ] Export k6 results to Prometheus remote write → Grafana dashboard for trend analysis
 - [ ] Define error budget burn rate alerts based on load test SLO targets
 
-## 🔜 v2.0 - User Subscriptions (RabbitMQ)
+## 🔜 v2.0 - Next.js Dashboard
 
-Kafka handles the data pipeline. RabbitMQ handles per-user routing: each user subscribes to specific protocols and thresholds, and receives targeted alerts via WebSocket.
-
-- [ ] RabbitMQ added to Docker Compose alongside Kafka (topic exchanges for per-user routing)
-- [ ] Subscription model: users define `{protocol, threshold}` pairs stored in a database
-- [ ] `notifier` publishes to RabbitMQ when a health score crosses a user subscription threshold
-- [ ] WebSocket server bridges RabbitMQ queues to connected browser clients
 - [ ] Next.js dashboard with real-time protocol health feed and subscription management UI
 - [ ] Historical health score API (`GET /api/v1/protocols/{id}/history`)
-- [ ] Cross-service trace context propagation via Kafka and RabbitMQ message headers
 
 ## 🔜 v2.1 - Real On-Chain Indexing
 

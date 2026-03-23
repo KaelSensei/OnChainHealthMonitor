@@ -20,8 +20,13 @@ graph TD
         Kong["Kong\n:8000 proxy\n:8001 admin"]
     end
 
-    subgraph Broker["Message Broker"]
+    subgraph Broker["Message Brokers"]
         Kafka["Kafka (KRaft)\n:9092\nonchain.events\nonchain.health"]
+        RabbitMQ["RabbitMQ\n:5672 / :15672\nexchange: onchain.alerts\n(topic)"]
+    end
+
+    subgraph DataStore["Data Store"]
+        Redis["Redis\n:6379"]
     end
 
     subgraph Services["Go Microservices"]
@@ -29,6 +34,7 @@ graph TD
         Analyzer["analyzer\n:8082\nHealth score computation"]
         Notifier["notifier\n:8083\nAlert engine"]
         API["api\n:8080\nREST API"]
+        Subscription["subscription\n:8084\nUser subscriptions + WebSocket"]
     end
 
     subgraph Observability["Observability Stack"]
@@ -51,6 +57,10 @@ graph TD
     Analyzer -->|"publish HealthEvent\nonchain.health"| Kafka
     Kafka -->|"consume HealthEvent\nnotifier-group"| Notifier
     Kafka -->|"consume HealthEvent\napi-group"| API
+    Notifier -->|"lookup subscriptions\nproto_subs:{protocol_id}"| Redis
+    Notifier -->|"publish AlertMessage\nrouting key user.{user_id}"| RabbitMQ
+    RabbitMQ -->|"deliver to queue\nalerts.{user_id}"| Subscription
+    Subscription -->|"subscription CRUD\nsub:{id}, user_subs:{user_id}"| Redis
 
     Collector -->|"OTLP gRPC"| OtelCollector
     Analyzer -->|"OTLP gRPC"| OtelCollector
@@ -76,6 +86,10 @@ sequenceDiagram
     participant A as analyzer
     participant KH as Kafka<br/>onchain.health
     participant N as notifier
+    participant R as Redis
+    participant RMQ as RabbitMQ<br/>onchain.alerts
+    participant SUB as subscription
+    participant WS as WebSocket Client
     participant API as api
     participant K as Kong
     participant P as Prometheus
@@ -101,6 +115,16 @@ sequenceDiagram
         KH->>N: Consume HealthEvent
         alt score < 30
             N->>N: Log ALERT (WARNING or CRITICAL)
+        end
+        N->>R: SMEMBERS proto_subs:{protocol_id}
+        R-->>N: matching subscription IDs
+        loop For each matching subscription
+            N->>R: GET sub:{id} (fetch user_id, threshold)
+            alt score <= threshold
+                N->>RMQ: Publish AlertMessage (routing key user.{user_id})
+                RMQ->>SUB: Deliver to queue alerts.{user_id}
+                SUB->>WS: Push alert via WebSocket
+            end
         end
     end
 
@@ -280,6 +304,38 @@ HTTP 404 for unknown protocol IDs.
 
 ---
 
+### `subscription` - User Subscriptions and Real-Time Alerts
+
+| Property | Value |
+|----------|-------|
+| Port | `8084` |
+| Role | Manages user subscriptions and delivers real-time alerts via WebSocket |
+| Inputs | REST requests for CRUD; RabbitMQ queue (onchain.alerts exchange, routing key `user.{user_id}`) |
+| Outputs | JSON REST responses; WebSocket alert messages |
+
+**Endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/subscriptions` | Create a subscription (`{user_id, protocol_id, threshold}`) |
+| `GET` | `/api/v1/subscriptions/{user_id}` | List subscriptions for a user |
+| `DELETE` | `/api/v1/subscriptions/{user_id}/{id}` | Delete a subscription |
+| `GET` | `/ws?user_id={user_id}` | WebSocket alert stream |
+
+**Subscription schema:**
+
+```json
+{
+  "id": "uuid",
+  "user_id": "string",
+  "protocol_id": "string",
+  "threshold": "integer (1-100)",
+  "created_at": "ISO 8601 timestamp"
+}
+```
+
+---
+
 ## Observability Stack
 
 ### Metrics - Prometheus + Grafana
@@ -368,10 +424,13 @@ All containers share a default bridge network created by Docker Compose. Service
 ```
 Docker bridge network: onchain_network
   ├── kafka          (onchain_kafka)           :9092 → host:9092
+  ├── rabbitmq       (onchain_rabbitmq)        :5672 / :15672 → host
+  ├── redis          (onchain_redis)           :6379 → host
   ├── collector      (onchain_collector)       :8081 → host:8081
   ├── analyzer       (onchain_analyzer)        :8082 → host:8082
   ├── notifier       (onchain_notifier)        :8083 → host:8083
   ├── api            (onchain_api)             :8080 → host:8080
+  ├── subscription   (onchain_subscription)   :8084 → host:8084
   ├── prometheus     (onchain_prometheus)      :9090 → host:9090
   ├── grafana        (onchain_grafana)         :3000 → host:3000
   ├── jaeger         (onchain_jaeger)          :16686 (UI) / :4317 (gRPC fallback) → host
@@ -413,6 +472,8 @@ Docker bridge network: onchain_network
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `KAFKA_BROKERS` | `kafka:9092` | Comma-separated list of Kafka broker addresses |
+| `REDIS_ADDR` | `redis:6379` | Redis address |
+| `RABBITMQ_URL` | `amqp://onchain:onchain@rabbitmq:5672/` | AMQP connection URL |
 
 ### `api`
 
@@ -420,7 +481,14 @@ Docker bridge network: onchain_network
 |----------|---------|-------------|
 | `KAFKA_BROKERS` | `kafka:9092` | Comma-separated list of Kafka broker addresses |
 
-> All four services read `KAFKA_BROKERS` from the environment. The value is set to `kafka:9092` in `docker-compose.yml` and should point to the broker list for your environment.
+### `subscription`
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `REDIS_ADDR` | `redis:6379` | Redis address |
+| `RABBITMQ_URL` | `amqp://onchain:onchain@rabbitmq:5672/` | AMQP connection URL |
+
+> All four pipeline services read `KAFKA_BROKERS` from the environment. The value is set to `kafka:9092` in `docker-compose.yml` and should point to the broker list for your environment.
 
 ---
 

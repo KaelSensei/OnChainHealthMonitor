@@ -28,8 +28,13 @@ graph TD
         Kong["Kong\n:8000 proxy\n:8001 admin"]
     end
 
-    subgraph Broker["Message Broker"]
+    subgraph Broker["Message Brokers"]
         Kafka["Kafka KRaft\n:9092\nonchain.events\nonchain.health"]
+        RabbitMQ["RabbitMQ\n:5672 / :15672\nexchange: onchain.alerts\n(topic)"]
+    end
+
+    subgraph DataStore["Data Store"]
+        Redis["Redis\n:6379"]
     end
 
     subgraph Services["Go Microservices"]
@@ -37,6 +42,7 @@ graph TD
         Analyzer["analyzer\n:8082\nHealth score computation"]
         Notifier["notifier\n:8083\nAlert engine"]
         API["api\n:8080\nREST API"]
+        Subscription["subscription\n:8084\nUser subscriptions + WebSocket"]
     end
 
     subgraph Observability["Observability Stack"]
@@ -59,6 +65,10 @@ graph TD
     Analyzer -->|"publish HealthEvent"| Kafka
     Kafka -->|"consume HealthEvent\nnotifier-group"| Notifier
     Kafka -->|"consume HealthEvent\napi-group"| API
+    Notifier -->|"lookup subscriptions"| Redis
+    Notifier -->|"route per-user alert"| RabbitMQ
+    RabbitMQ -->|"deliver alert"| Subscription
+    Subscription <-->|"subscription CRUD"| Redis
 
     Collector -->|"OTLP gRPC"| OtelCollector
     Analyzer -->|"OTLP gRPC"| OtelCollector
@@ -84,6 +94,10 @@ sequenceDiagram
     participant A as analyzer
     participant KH as Kafka onchain.health
     participant N as notifier
+    participant R as Redis
+    participant RMQ as RabbitMQ onchain.alerts
+    participant SUB as subscription
+    participant WS as WebSocket Client
     participant API as api
     participant K as Kong
     participant P as Prometheus
@@ -104,6 +118,16 @@ sequenceDiagram
         KH->>N: Consume HealthEvent
         alt score < 30
             N->>N: Log ALERT (WARNING or CRITICAL)
+        end
+        N->>R: Lookup proto_subs:{protocol_id}
+        R-->>N: Matching subscription IDs
+        loop For each matching subscription
+            N->>R: GET sub:{id}
+            alt score <= threshold
+                N->>RMQ: Publish AlertMessage (routing key user.{user_id})
+                RMQ->>SUB: Deliver to queue alerts.{user_id}
+                SUB->>WS: Push alert via WebSocket
+            end
         end
     end
 
@@ -129,12 +153,13 @@ sequenceDiagram
 
 ## Services
 
-| Service     | Port | Role                                                                        |
-|-------------|------|-----------------------------------------------------------------------------|
-| `collector` | 8081 | Generates DeFi events (mock mode) and publishes to `onchain.events`         |
-| `analyzer`  | 8082 | Consumes `onchain.events`, computes health scores, publishes `onchain.health` |
-| `notifier`  | 8083 | Consumes `onchain.health`, fires alerts when score drops below 30           |
-| `api`       | 8080 | Consumes `onchain.health`, serves live protocol data via REST               |
+| Service        | Port | Role                                                                        |
+|----------------|------|-----------------------------------------------------------------------------|
+| `collector`    | 8081 | Generates DeFi events (mock mode) and publishes to `onchain.events`         |
+| `analyzer`     | 8082 | Consumes `onchain.events`, computes health scores, publishes `onchain.health` |
+| `notifier`     | 8083 | Consumes `onchain.health`, fires alerts when score drops below 30           |
+| `api`          | 8080 | Consumes `onchain.health`, serves live protocol data via REST               |
+| `subscription` | 8084 | Manages user subscriptions (CRUD + Redis), delivers real-time alerts via WebSocket (RabbitMQ) |
 
 All services expose:
 - `GET /health` → `{"status":"ok"}` for liveness checks
@@ -144,19 +169,21 @@ All services expose:
 
 ## Stack
 
-| Theme                    | Tool                        | Why                                                      |
-|--------------------------|-----------------------------|----------------------------------------------------------|
-| Language                 | Go 1.22                     | Fast, minimal stdlib, perfect for microservices          |
-| Message Broker           | Apache Kafka (KRaft)        | High-throughput event streaming; decouples all services; replay support |
-| Containers               | Docker + Docker Compose     | Reproducible local environment, mirrors prod topology    |
-| Observability: Metrics   | Prometheus + Grafana        | Industry standard; scrape model fits pull-based services |
-| Observability: Tracing   | OpenTelemetry + OTel Collector + Jaeger | OTLP gRPC pipeline: services -> collector -> Jaeger UI |
-| CI/CD                    | GitHub Actions              | Native to GitHub, path-based triggers for monorepos      |
-| Reliability / Alerting   | Grafana Alerting            | Unified alerting with SLO-based rules, no extra infra    |
-| API Gateway              | Kong (open-source)          | Plugin ecosystem (rate limit, auth, logging) on OSS      |
-| Infra as Code            | Terraform                   | Declarative, provider-agnostic, auditable history        |
-| Kubernetes packaging     | Helm                        | Templated manifests, per-environment value overrides     |
-| Cloud                    | GCP / GKE (or k3s locally)  | k3s for zero-cost dev; GKE for real deployment           |
+| Theme                      | Tool                        | Why                                                      |
+|----------------------------|-----------------------------|----------------------------------------------------------|
+| Language                   | Go 1.22                     | Fast, minimal stdlib, perfect for microservices          |
+| Message Broker             | Apache Kafka (KRaft)        | High-throughput event streaming; decouples all services; replay support |
+| User notification routing  | RabbitMQ                    | Topic exchange pattern routes alerts to specific users; auto-delete queues per connected client |
+| Subscription storage       | Redis                       | Fast set-based lookup by protocol; per-user subscription index |
+| Containers                 | Docker + Docker Compose     | Reproducible local environment, mirrors prod topology    |
+| Observability: Metrics     | Prometheus + Grafana        | Industry standard; scrape model fits pull-based services |
+| Observability: Tracing     | OpenTelemetry + OTel Collector + Jaeger | OTLP gRPC pipeline: services -> collector -> Jaeger UI |
+| CI/CD                      | GitHub Actions              | Native to GitHub, path-based triggers for monorepos      |
+| Reliability / Alerting     | Grafana Alerting            | Unified alerting with SLO-based rules, no extra infra    |
+| API Gateway                | Kong (open-source)          | Plugin ecosystem (rate limit, auth, logging) on OSS      |
+| Infra as Code              | Terraform                   | Declarative, provider-agnostic, auditable history        |
+| Kubernetes packaging       | Helm                        | Templated manifests, per-environment value overrides     |
+| Cloud                      | GCP / GKE (or k3s locally)  | k3s for zero-cost dev; GKE for real deployment           |
 
 ---
 
