@@ -1,10 +1,17 @@
 // Package main implements the OnChain Health Monitor collector service.
 // It runs in mock mode by default, emitting fake but realistic DeFi events
-// (prices, TVL, protocol events) as JSON every 2 seconds.
+// (prices, TVL, protocol events) as JSON to both stdout and the Kafka topic
+// "onchain.events" every 2 seconds.
 //
 // HTTP endpoints:
-//   - GET /health  → {"status":"ok"}
-//   - GET /metrics → Real Prometheus metrics via promhttp
+//
+//   - GET /health  -> {"status":"ok"}
+//   - GET /metrics -> Real Prometheus metrics via promhttp
+//
+// Environment variables:
+//
+//   - KAFKA_BROKERS              Comma-separated broker list (default: kafka:9092)
+//   - OTEL_EXPORTER_OTLP_ENDPOINT gRPC endpoint for traces  (default: jaeger:4317)
 package main
 
 import (
@@ -16,11 +23,13 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/segmentio/kafka-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -56,7 +65,7 @@ var protocols = []Protocol{
 	{ID: "compound", Name: "Compound"},
 }
 
-// State holds per-protocol running state to simulate realistic drift.
+// protocolState holds per-protocol running state to simulate realistic drift.
 type protocolState struct {
 	price float64
 	tvl   float64
@@ -66,7 +75,7 @@ var (
 	mu     sync.RWMutex
 	states map[string]*protocolState
 
-	// Baseline values per protocol (USD).
+	// baselines holds the expected price (USD) and TVL (USD) per protocol.
 	baselines = map[string][2]float64{
 		"uniswap":  {6.50, 4_200_000_000},
 		"aave":     {95.00, 6_100_000_000},
@@ -164,6 +173,17 @@ func initTracer(ctx context.Context, serviceName string) (func(), error) {
 	}, nil
 }
 
+// newKafkaWriter creates a Kafka writer for the given topic.
+func newKafkaWriter(brokers []string, topic string) *kafka.Writer {
+	return &kafka.Writer{
+		Addr:         kafka.TCP(brokers...),
+		Topic:        topic,
+		Balancer:     &kafka.Hash{},
+		WriteTimeout: 5 * time.Second,
+		ReadTimeout:  5 * time.Second,
+	}
+}
+
 // drift applies a small random walk to a value, clamped to ±20% of baseline.
 func drift(current, baseline, maxPctChange float64) float64 {
 	pct := (rand.Float64()*2 - 1) * maxPctChange
@@ -190,7 +210,6 @@ func pickEventType() string {
 
 func generateEvent(ctx context.Context, p Protocol) DeFiEvent {
 	tracer := otel.Tracer("collector")
-
 	start := time.Now()
 
 	mu.Lock()
@@ -205,7 +224,6 @@ func generateEvent(ctx context.Context, p Protocol) DeFiEvent {
 	volume := tvl * (0.01 + rand.Float64()*0.04)
 	eventType := pickEventType()
 
-	// Create a span for this event generation.
 	_, span := tracer.Start(ctx, "generate_event", trace.WithAttributes(
 		attribute.String("protocol", p.ID),
 		attribute.String("event_type", eventType),
@@ -224,7 +242,6 @@ func generateEvent(ctx context.Context, p Protocol) DeFiEvent {
 		Volume24h:    math.Round(volume),
 	}
 
-	// Update Prometheus metrics
 	eventsTotal.WithLabelValues(p.ID, normaliseEventType(eventType)).Inc()
 	lastPrice.WithLabelValues(p.ID).Set(price)
 	lastTVL.WithLabelValues(p.ID).Set(tvl)
@@ -233,17 +250,33 @@ func generateEvent(ctx context.Context, p Protocol) DeFiEvent {
 	return ev
 }
 
-func emitLoop() {
+func emitLoop(writer *kafka.Writer) {
 	ctx := context.Background()
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+
 	enc := json.NewEncoder(log.Writer())
 	enc.SetIndent("", "  ")
+
 	for range ticker.C {
 		for _, p := range protocols {
 			ev := generateEvent(ctx, p)
+
 			if err := enc.Encode(ev); err != nil {
 				log.Printf("encode error: %v", err)
+			}
+
+			payload, err := json.Marshal(ev)
+			if err != nil {
+				log.Printf("marshal error: %v", err)
+				continue
+			}
+
+			if err := writer.WriteMessages(ctx, kafka.Message{
+				Key:   []byte(ev.ProtocolID),
+				Value: payload,
+			}); err != nil {
+				log.Printf("kafka write error: %v", err)
 			}
 		}
 	}
@@ -268,7 +301,12 @@ func main() {
 		log.Println("OpenTelemetry tracer initialized")
 	}
 
-	go emitLoop()
+	brokers := strings.Split(getEnv("KAFKA_BROKERS", "kafka:9092"), ",")
+	writer := newKafkaWriter(brokers, "onchain.events")
+	defer writer.Close()
+	log.Printf("Kafka writer connected to %v, topic=onchain.events", brokers)
+
+	go emitLoop(writer)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)

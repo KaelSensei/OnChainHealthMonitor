@@ -1,24 +1,35 @@
 // Package main implements the OnChain Health Monitor analyzer service.
-// It simulates receiving events from the collector and producing health scores
-// (0-100) per protocol, logging results every 3 seconds.
+// It consumes DeFiEvent messages from the Kafka topic "onchain.events",
+// computes a health score (0-100) per protocol based on price and TVL
+// deviation from their baselines, and publishes HealthEvent messages to
+// the Kafka topic "onchain.health".
 //
 // HTTP endpoints:
-//   - GET /health  → {"status":"ok"}
-//   - GET /metrics → Real Prometheus metrics via promhttp
+//
+//   - GET /health  -> {"status":"ok"}
+//   - GET /metrics -> Real Prometheus metrics via promhttp
+//
+// Environment variables:
+//
+//   - KAFKA_BROKERS              Comma-separated broker list (default: kafka:9092)
+//   - OTEL_EXPORTER_OTLP_ENDPOINT gRPC endpoint for traces  (default: jaeger:4317)
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
+	"math"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/segmentio/kafka-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -30,20 +41,41 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// HealthScore holds the computed health score for a protocol.
-type HealthScore struct {
-	ProtocolID string
-	Score      int
-	Label      string
-	UpdatedAt  time.Time
+// DeFiEvent is the message consumed from the "onchain.events" topic.
+type DeFiEvent struct {
+	Timestamp    time.Time `json:"timestamp"`
+	ProtocolID   string    `json:"protocol_id"`
+	ProtocolName string    `json:"protocol_name"`
+	Price        float64   `json:"price_usd"`
+	TVL          float64   `json:"tvl_usd"`
+	EventType    string    `json:"event_type"`
+	Volume24h    float64   `json:"volume_24h_usd"`
+}
+
+// HealthEvent is the message published to the "onchain.health" topic.
+type HealthEvent struct {
+	ProtocolID string    `json:"protocol_id"`
+	Score      int       `json:"score"`
+	Label      string    `json:"label"`
+	PriceUSD   float64   `json:"price_usd"`
+	TVLUSD     float64   `json:"tvl_usd"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 var (
 	mu     sync.RWMutex
-	scores = map[string]*HealthScore{
-		"uniswap":  {ProtocolID: "uniswap", Score: 80, Label: "healthy"},
-		"aave":     {ProtocolID: "aave", Score: 75, Label: "healthy"},
-		"compound": {ProtocolID: "compound", Score: 60, Label: "degraded"},
+	scores = map[string]*HealthEvent{
+		"uniswap":  {ProtocolID: "uniswap", Score: 50, Label: "degraded"},
+		"aave":     {ProtocolID: "aave", Score: 50, Label: "degraded"},
+		"compound": {ProtocolID: "compound", Score: 50, Label: "degraded"},
+	}
+
+	// baselines holds the expected price (USD) and TVL (USD) per protocol.
+	// Score = 50 at baseline, 100 at +20%, 0 at -20%.
+	baselines = map[string][2]float64{
+		"uniswap":  {6.50, 4_200_000_000},
+		"aave":     {95.00, 6_100_000_000},
+		"compound": {52.00, 2_300_000_000},
 	}
 )
 
@@ -78,7 +110,7 @@ var (
 	analysisDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Name:    "onchain_analyzer_analysis_duration_seconds",
-			Help:    "Time taken for one full analysis cycle across all protocols.",
+			Help:    "Time taken to process one event and compute a health score.",
 			Buckets: prometheus.DefBuckets,
 		},
 	)
@@ -93,7 +125,6 @@ func init() {
 		analysisDuration,
 	)
 
-	// Seed gauges with initial values.
 	for id, hs := range scores {
 		healthScore.WithLabelValues(id).Set(float64(hs.Score))
 	}
@@ -159,55 +190,104 @@ func alertSeverity(score int) string {
 	return "warning"
 }
 
-// analyzeLoop simulates receiving events and computing health scores.
-func analyzeLoop() {
+// computeScore maps price and TVL deviation from baseline to a 0-100 score.
+// At baseline the score is 50. At +20% it is 100, at -20% it is 0.
+// Liquidation events apply an additional -10 penalty.
+func computeScore(protocolID string, price, tvl float64, eventType string) int {
+	b := baselines[protocolID]
+	priceBaseline, tvlBaseline := b[0], b[1]
+
+	priceNorm := (price - priceBaseline*0.8) / (priceBaseline * 0.4)
+	tvlNorm := (tvl - tvlBaseline*0.8) / (tvlBaseline * 0.4)
+
+	priceNorm = math.Max(0, math.Min(1, priceNorm))
+	tvlNorm = math.Max(0, math.Min(1, tvlNorm))
+
+	score := int((priceNorm*0.5+tvlNorm*0.5)*100)
+
+	if eventType == "liquidation" {
+		score -= 10
+	}
+
+	if score < 0 {
+		return 0
+	}
+	if score > 100 {
+		return 100
+	}
+	return score
+}
+
+// consumeLoop reads DeFiEvents from Kafka, computes health scores, and
+// publishes HealthEvents back to Kafka.
+func consumeLoop(ctx context.Context, reader *kafka.Reader, writer *kafka.Writer) {
 	tracer := otel.Tracer("analyzer")
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
-	for range ticker.C {
+
+	for {
+		msg, err := reader.ReadMessage(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("kafka read error: %v", err)
+			continue
+		}
+
 		start := time.Now()
 
-		mu.Lock()
-		for id, hs := range scores {
-			ctx, span := tracer.Start(context.Background(), "analyze_protocol",
-				// attributes added after computation below
-			)
-
-			// Simulate score drift: small random walk clamped 0–100.
-			delta := rand.Intn(11) - 5 // -5 to +5
-			next := hs.Score + delta
-			if next < 0 {
-				next = 0
-			} else if next > 100 {
-				next = 100
-			}
-			hs.Score = next
-			hs.Label = scoreLabel(next)
-			hs.UpdatedAt = time.Now().UTC()
-
-			log.Printf("protocol=%s score=%d label=%s", id, next, hs.Label)
-
-			// Add span attributes.
-			span.SetAttributes(
-				attribute.String("protocol", id),
-				attribute.Int("health_score", next),
-				attribute.String("severity", hs.Label),
-			)
-			span.End()
-			_ = ctx // ctx available for downstream propagation if needed
-
-			// Update Prometheus metrics.
-			scoresComputedTotal.WithLabelValues(id).Inc()
-			healthScore.WithLabelValues(id).Set(float64(next))
-
-			if next < 40 {
-				sev := alertSeverity(next)
-				alertsTriggeredTotal.WithLabelValues(id, sev).Inc()
-			}
+		var ev DeFiEvent
+		if err := json.Unmarshal(msg.Value, &ev); err != nil {
+			log.Printf("unmarshal error: %v", err)
+			continue
 		}
+
+		_, span := tracer.Start(ctx, "analyze_protocol")
+		score := computeScore(ev.ProtocolID, ev.Price, ev.TVL, ev.EventType)
+		label := scoreLabel(score)
+
+		he := &HealthEvent{
+			ProtocolID: ev.ProtocolID,
+			Score:      score,
+			Label:      label,
+			PriceUSD:   ev.Price,
+			TVLUSD:     ev.TVL,
+			UpdatedAt:  time.Now().UTC(),
+		}
+
+		span.SetAttributes(
+			attribute.String("protocol", ev.ProtocolID),
+			attribute.Int("health_score", score),
+			attribute.String("label", label),
+		)
+		span.End()
+
+		mu.Lock()
+		scores[ev.ProtocolID] = he
 		mu.Unlock()
 
+		log.Printf("protocol=%s score=%d label=%s price=%.4f tvl=%.0f",
+			ev.ProtocolID, score, label, ev.Price, ev.TVL)
+
+		scoresComputedTotal.WithLabelValues(ev.ProtocolID).Inc()
+		healthScore.WithLabelValues(ev.ProtocolID).Set(float64(score))
+		if score < 40 {
+			alertsTriggeredTotal.WithLabelValues(ev.ProtocolID, alertSeverity(score)).Inc()
+		}
+
 		analysisDuration.Observe(time.Since(start).Seconds())
+
+		payload, err := json.Marshal(he)
+		if err != nil {
+			log.Printf("marshal error: %v", err)
+			continue
+		}
+
+		if err := writer.WriteMessages(ctx, kafka.Message{
+			Key:   []byte(ev.ProtocolID),
+			Value: payload,
+		}); err != nil {
+			log.Printf("kafka write error: %v", err)
+		}
 	}
 }
 
@@ -230,7 +310,31 @@ func main() {
 		log.Println("OpenTelemetry tracer initialized")
 	}
 
-	go analyzeLoop()
+	brokers := strings.Split(getEnv("KAFKA_BROKERS", "kafka:9092"), ",")
+
+	reader := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:        brokers,
+		Topic:          "onchain.events",
+		GroupID:        "analyzer-group",
+		MinBytes:       1,
+		MaxBytes:       1 << 20, // 1 MiB
+		CommitInterval: time.Second,
+	})
+	defer reader.Close()
+
+	writer := &kafka.Writer{
+		Addr:         kafka.TCP(brokers...),
+		Topic:        "onchain.health",
+		Balancer:     &kafka.Hash{},
+		WriteTimeout: 5 * time.Second,
+		ReadTimeout:  5 * time.Second,
+	}
+	defer writer.Close()
+
+	log.Printf("Kafka consumer connected to %v, topic=onchain.events group=analyzer-group", brokers)
+	log.Printf("Kafka writer connected to %v, topic=onchain.health", brokers)
+
+	go consumeLoop(ctx, reader, writer)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)

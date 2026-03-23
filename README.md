@@ -20,29 +20,33 @@
 
 ```mermaid
 graph TD
-    subgraph External["🌐 External Traffic"]
+    subgraph External["External Traffic"]
         Client([Client / Browser])
     end
 
-    subgraph Gateway["🦍 API Gateway"]
+    subgraph Gateway["API Gateway"]
         Kong["Kong\n:8000 proxy\n:8001 admin"]
     end
 
-    subgraph Services["⚙️ Go Microservices"]
-        Collector["collector\n:8081\nDeFi event ingestion"]
-        Analyzer["analyzer\n:8082\nHealth scoring"]
-        Notifier["notifier\n:8083\nAlerting"]
+    subgraph Broker["Message Broker"]
+        Kafka["Kafka KRaft\n:9092\nonchain.events\nonchain.health"]
+    end
+
+    subgraph Services["Go Microservices"]
+        Collector["collector\n:8081\nDeFi event producer"]
+        Analyzer["analyzer\n:8082\nHealth score computation"]
+        Notifier["notifier\n:8083\nAlert engine"]
         API["api\n:8080\nREST API"]
     end
 
-    subgraph Observability["📊 Observability Stack"]
+    subgraph Observability["Observability Stack"]
         Prometheus["Prometheus\n:9090"]
         Grafana["Grafana\n:3000"]
         OtelCollector["OTel Collector\n:4317"]
         Jaeger["Jaeger\n:16686"]
     end
 
-    subgraph Docs["📋 API Docs"]
+    subgraph Docs["API Docs"]
         Swagger["Swagger UI\n:8090"]
     end
 
@@ -50,14 +54,14 @@ graph TD
     Kong -->|"proxy"| API
     Kong -->|"/swagger"| Swagger
 
-    Collector -->|"events"| Analyzer
-    Analyzer -->|"scores"| Notifier
-    API -->|"reads scores"| Analyzer
+    Collector -->|"publish DeFiEvent"| Kafka
+    Kafka -->|"consume DeFiEvent\nanalyzer-group"| Analyzer
+    Analyzer -->|"publish HealthEvent"| Kafka
+    Kafka -->|"consume HealthEvent\nnotifier-group"| Notifier
+    Kafka -->|"consume HealthEvent\napi-group"| API
 
     Collector -->|"OTLP gRPC"| OtelCollector
     Analyzer -->|"OTLP gRPC"| OtelCollector
-    Notifier -->|"OTLP gRPC"| OtelCollector
-    API -->|"OTLP gRPC"| OtelCollector
     OtelCollector -->|"OTLP"| Jaeger
 
     Prometheus -->|"scrape /metrics"| Collector
@@ -76,30 +80,39 @@ graph TD
 ```mermaid
 sequenceDiagram
     participant C as collector
+    participant KE as Kafka onchain.events
     participant A as analyzer
+    participant KH as Kafka onchain.health
     participant N as notifier
     participant API as api
     participant K as Kong
     participant P as Prometheus
-    participant OC as OTel Collector
-    participant J as Jaeger
-    participant G as Grafana
     participant CL as Client
 
-    loop Every 2 seconds
-        C->>C: Ingest DeFi event<br/>(price, TVL, protocol_event)
-        C->>OC: Export trace span (generate_event)
-        C->>A: Emit event data
-        A->>A: Compute health score (0–100)
-        A->>OC: Export trace span (analyze_protocol)
+    loop Every 2s per protocol
+        C->>C: Generate DeFiEvent (price, TVL, event_type)
+        C->>KE: Publish DeFiEvent (key=protocol_id)
+    end
+
+    loop On every DeFiEvent (analyzer-group)
+        KE->>A: Consume DeFiEvent
+        A->>A: Compute score from price/TVL deviation
+        A->>KH: Publish HealthEvent (score, label, price, tvl)
+    end
+
+    loop On every HealthEvent (notifier-group)
+        KH->>N: Consume HealthEvent
         alt score < 30
-            A->>N: Trigger alert
-            N->>N: Log 🔔 ALERT
-            N->>OC: Export trace span (send_notification)
+            N->>N: Log ALERT (WARNING or CRITICAL)
         end
     end
 
-    loop Every 15 seconds
+    loop On every HealthEvent (api-group)
+        KH->>API: Consume HealthEvent
+        API->>API: Update in-memory protocol state
+    end
+
+    loop Every 15s
         P->>C: Scrape /metrics
         P->>A: Scrape /metrics
         P->>N: Scrape /metrics
@@ -107,27 +120,21 @@ sequenceDiagram
     end
 
     CL->>K: GET /api/v1/protocols
-    K->>API: Proxy request (rate limit check)
-    API->>API: Return protocol list with health scores
-    API->>OC: Export trace span (GET /api/v1/protocols)
-    API->>K: Response
-    K->>CL: Response + X-Request-ID header
-
-    OC->>J: Forward traces (batch)
-    G->>P: Query PromQL
-    G->>J: Query traces
+    K->>API: Proxy (rate limit check)
+    API->>K: Live scores from last HealthEvent
+    K->>CL: Response + X-Request-ID
 ```
 
 ---
 
 ## Services
 
-| Service     | Port | Role                                                              |
-|-------------|------|-------------------------------------------------------------------|
-| `collector` | 8081 | Ingests on-chain data (mock mode: emits DeFi events every 2s)    |
-| `analyzer`  | 8082 | Processes events, computes health scores (0–100) per protocol     |
-| `notifier`  | 8083 | Fires alerts when any protocol score drops below threshold (30)   |
-| `api`       | 8080 | REST API exposing protocol health data to external consumers      |
+| Service     | Port | Role                                                                        |
+|-------------|------|-----------------------------------------------------------------------------|
+| `collector` | 8081 | Generates DeFi events (mock mode) and publishes to `onchain.events`         |
+| `analyzer`  | 8082 | Consumes `onchain.events`, computes health scores, publishes `onchain.health` |
+| `notifier`  | 8083 | Consumes `onchain.health`, fires alerts when score drops below 30           |
+| `api`       | 8080 | Consumes `onchain.health`, serves live protocol data via REST               |
 
 All services expose:
 - `GET /health` → `{"status":"ok"}` for liveness checks
@@ -140,9 +147,10 @@ All services expose:
 | Theme                    | Tool                        | Why                                                      |
 |--------------------------|-----------------------------|----------------------------------------------------------|
 | Language                 | Go 1.22                     | Fast, minimal stdlib, perfect for microservices          |
+| Message Broker           | Apache Kafka (KRaft)        | High-throughput event streaming; decouples all services; replay support |
 | Containers               | Docker + Docker Compose     | Reproducible local environment, mirrors prod topology    |
 | Observability: Metrics   | Prometheus + Grafana        | Industry standard; scrape model fits pull-based services |
-| Observability: Tracing   | OpenTelemetry + OTel Collector + Jaeger | OTLP gRPC pipeline: services → collector → Jaeger UI |
+| Observability: Tracing   | OpenTelemetry + OTel Collector + Jaeger | OTLP gRPC pipeline: services -> collector -> Jaeger UI |
 | CI/CD                    | GitHub Actions              | Native to GitHub, path-based triggers for monorepos      |
 | Reliability / Alerting   | Grafana Alerting            | Unified alerting with SLO-based rules, no extra infra    |
 | API Gateway              | Kong (open-source)          | Plugin ecosystem (rate limit, auth, logging) on OSS      |
