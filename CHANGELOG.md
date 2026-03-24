@@ -11,6 +11,18 @@ Versions map to GitHub pull requests; the project does not use semver tags yet.
 
 ---
 
+## [0.9.0] - 2026-03-24 - PR #10: Docker build validation on every PR
+
+### Fixed
+
+- All six `build-and-push` CI jobs were gated with
+  `if: github.ref == 'refs/heads/main'`, meaning a broken Dockerfile was only
+  discovered after merge. The job now runs on every push and PR; only the push
+  to GHCR remains conditional on `main`. The GHCR login step is also skipped
+  on PRs so no credentials are required for a build-only run.
+
+---
+
 ## [0.8.0] - 2026-03-23 - PR #8: Fix collector and analyzer Docker builds
 
 ### Fixed
