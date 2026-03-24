@@ -6,7 +6,7 @@
   <strong>Functionally simple. Architecturally serious.</strong>
 </p>
 
-[![Go](https://img.shields.io/badge/Go-1.22-00ADD8?logo=go)](https://golang.org)
+[![Go](https://img.shields.io/badge/Go-1.23-00ADD8?logo=go)](https://golang.org)
 [![License](https://img.shields.io/github/license/KaelSensei/OnChainHealthMonitor)](LICENSE)
 
 [![CI - api](https://github.com/KaelSensei/OnChainHealthMonitor/actions/workflows/ci-api.yml/badge.svg)](https://github.com/KaelSensei/OnChainHealthMonitor/actions/workflows/ci-api.yml)
@@ -195,7 +195,7 @@ All services expose:
 
 | Theme                      | Tool                        | Why                                                      |
 |----------------------------|-----------------------------|----------------------------------------------------------|
-| Language (backend)         | Go 1.22                     | Fast, minimal stdlib, perfect for microservices          |
+| Language (backend)         | Go 1.23                     | Fast, minimal stdlib, perfect for microservices          |
 | Language (frontend)        | TypeScript + Next.js 14     | App Router enables SSR for initial data; client components for real-time updates; API routes as BFF proxy |
 | Message Broker             | Apache Kafka (KRaft)        | High-throughput event streaming; decouples all services; replay support |
 | User notification routing  | RabbitMQ                    | Topic exchange pattern routes alerts to specific users; auto-delete queues per connected client |
@@ -203,7 +203,7 @@ All services expose:
 | Containers                 | Docker + Docker Compose     | Reproducible local environment, mirrors prod topology    |
 | Observability: Metrics     | Prometheus + Grafana        | Industry standard; scrape model fits pull-based services |
 | Observability: Tracing     | OpenTelemetry + OTel Collector + Jaeger | OTLP gRPC pipeline: services -> collector -> Jaeger UI |
-| CI/CD                      | GitHub Actions              | Native to GitHub, path-based triggers for monorepos      |
+| CI/CD                      | GitHub Actions + Husky      | GHA for remote; Husky for local commit-msg + pre-commit hooks |
 | Reliability / Alerting     | Grafana Alerting            | Unified alerting with SLO-based rules, no extra infra    |
 | API Gateway                | Kong (open-source)          | Plugin ecosystem (rate limit, auth, logging) on OSS      |
 | Infra as Code              | Terraform                   | Declarative, provider-agnostic, auditable history        |
@@ -229,6 +229,9 @@ See [Infrastructure Guide](docs/deployment/INFRASTRUCTURE_GUIDE.md) for full det
 # Clone
 git clone https://github.com/KaelSensei/OnChainHealthMonitor.git
 cd OnChainHealthMonitor
+
+# Install dev tooling (Husky hooks, commitlint, lint-staged)
+npm install
 
 # Start the full stack
 docker-compose up --build
@@ -322,7 +325,8 @@ OnChainHealthMonitor/
 │   ├── notifier/      # Alert engine
 │   ├── api/           # Public REST API
 │   └── subscription/  # Subscription CRUD + WebSocket alert delivery
-├── dashboard/         # Next.js 14 frontend (protocol health + subscriptions)
+├── dashboard/         # Next.js 14 frontend (protocol health + subscriptions + 55 Vitest tests)
+├── e2e/               # End-to-end smoke test suite
 ├── infra/
 │   ├── terraform/     # GCP/GKE infrastructure as code
 │   ├── helm/          # Helm charts per service
@@ -333,11 +337,14 @@ OnChainHealthMonitor/
 │   ├── otel/          # OpenTelemetry collector config
 │   └── jaeger/        # Jaeger configuration
 ├── docs/
-│   ├── architecture/  # ARCHITECTURE.md + ADRs
+│   ├── architecture/  # ARCHITECTURE.md + 16 ADRs
 │   ├── deployment/    # Infrastructure & CI/CD guides
-│   └── development/   # Onboarding guide
+│   └── development/   # Onboarding, contributing, tracing guides
+├── scripts/           # Developer utility scripts
 ├── .github/
-│   └── workflows/     # GitHub Actions pipelines
+│   └── workflows/     # GitHub Actions pipelines (10 workflows)
+├── .husky/            # Git hooks: commit-msg + pre-commit
+├── package.json       # Root dev tooling: Husky, commitlint, lint-staged
 ├── docker-compose.yml
 └── README.md
 ```
@@ -361,7 +368,8 @@ graph LR
         Build["go build"]
         NpmLint["npm run lint"]
         NpmBuild["npm run build"]
-        Docker["docker build\n+ push GHCR"]
+        NpmTest["npm run test"]
+        Docker["docker build (all branches)\n+ push GHCR (main only)"]
     end
 
     subgraph Infra["Infra validation"]
@@ -378,7 +386,7 @@ graph LR
     Commit --> CommitLint
     Commit --> MDLint
     Commit --> Vet --> Static --> Test --> Build --> Docker
-    Commit --> NpmLint --> NpmBuild --> Docker
+    Commit --> NpmLint --> NpmBuild --> NpmTest --> Docker
     Commit --> Compose
     Commit --> Kong
     Commit --> OApi

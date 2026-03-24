@@ -419,7 +419,7 @@ Key design choices:
 - **WebSocket connects browser-direct** to the subscription service on port 8084 (`ws://{hostname}:8084/ws`). Proxying WebSocket through Next.js would require a custom server and is not worth the complexity for this scope.
 - **User identity via localStorage UUID** - no authentication layer required; a random UUID is generated on first visit and persisted, giving each browser session a stable user ID for subscription management.
 - **Port 3001** - port 3000 is already occupied by Grafana in the Compose stack.
-- **Standalone output** (`output: 'standalone'` in `next.config.ts`) - produces a self-contained Node.js server without `node_modules`, keeping the Docker image small.
+- **Standalone output** (`output: 'standalone'` in `next.config.mjs`) - produces a self-contained Node.js server without `node_modules`, keeping the Docker image small.
 
 **Consequences:**
 - ✅ Initial page load delivers a fully rendered protocol grid with no loading flash
@@ -428,3 +428,45 @@ Key design choices:
 - ✅ Standalone Docker output means the runtime image is `node:20-alpine` + a ~50MB `.next/standalone` directory
 - ⚠️ WebSocket URL is derived from `window.location.hostname` at runtime; in a production deployment behind a reverse proxy, port 8084 must be exposed or the WebSocket traffic routed through the proxy
 - ⚠️ Protocol polling is client-side every 5 s; at scale, server-sent events or a Next.js streaming response would be more efficient
+
+---
+
+## ADR-017: Vitest for dashboard testing
+
+**Date:** 2026-03-24
+**Status:** Accepted
+
+**Context:**
+The Next.js dashboard needed a test suite covering React components and API route handlers. The existing Go services use the standard `go test` runner; the frontend needed an equivalent that integrates with the TypeScript and JSX build pipeline.
+
+Alternatives considered:
+
+| Option | Rejected because |
+|---|---|
+| Jest | Requires additional Babel transform config for ESM + Next.js; slower cold start |
+| Playwright (only) | E2E tests only; cannot test components in isolation or mock fetch calls |
+| No tests | Unacceptable; components and API routes have non-trivial logic |
+
+**Decision:**
+Use Vitest with `@testing-library/react` and `happy-dom`.
+
+- **Vitest** shares the Vite transform pipeline so TypeScript + JSX work without extra config.
+- **`@testing-library/react`** encourages testing from the user's perspective (rendered output, interactions) rather than implementation details.
+- **`happy-dom`** is a lightweight DOM implementation that is significantly faster than `jsdom` for unit tests that do not need a full browser environment.
+- API route handlers are tested directly (imported and called), with `fetch` mocked via `vi.spyOn(global, 'fetch')`.
+
+**Test coverage:**
+
+| Suite | Tests | What is covered |
+|---|---|---|
+| `ProtocolCard` | 13 | Health state rendering, score display, protocol metadata |
+| `AlertFeed` | 12 | WebSocket lifecycle, incoming messages, empty state |
+| `SubscriptionPanel` | 15 | Create/list/delete flows, threshold validation, error states |
+| API `/api/protocols` | 7 | Backend proxy, error handling, response shape |
+| API `/api/subscriptions` | 8 | Full CRUD route handlers |
+
+**Consequences:**
+- ✅ `npm run test` runs all 55 tests in under 3 seconds
+- ✅ No Babel config needed; Vitest uses the same esbuild transform as the Next.js build
+- ✅ Tests run in CI as part of `ci-dashboard.yml` before the Docker build step
+- ⚠️ `happy-dom` does not support all browser APIs; tests requiring `WebSocket` or `localStorage` need explicit mocking
