@@ -28,7 +28,7 @@ Kong proxies the public API. OTel Collector forwards traces to Jaeger.
 | notifier | 8083 | done | Fires system alerts + routes user alerts via RabbitMQ |
 | api | 8080 | done | Serves live protocol state from Kafka |
 | subscription | 8084 | done | REST CRUD + WebSocket alert delivery |
-| dashboard | 3001 | done | Next.js 14 health feed + subscription UI |
+| dashboard | 3001 | done | Next.js 14 health feed + subscription UI — 55 Vitest tests |
 
 ---
 

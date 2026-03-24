@@ -11,6 +11,25 @@ Versions map to GitHub pull requests; the project does not use semver tags yet.
 
 ---
 
+## [0.11.0] - 2026-03-24 - PR #12: Vitest unit and integration tests for Next.js dashboard
+
+### Added
+
+- Vitest + `@testing-library/react` + `happy-dom` test setup for the dashboard.
+- 55 tests across 5 suites:
+  - `ProtocolCard` — renders all health states (healthy / degraded / critical),
+    score display, protocol metadata.
+  - `AlertFeed` — WebSocket connection lifecycle, incoming message rendering,
+    empty state.
+  - `SubscriptionPanel` — create/list/delete subscription flows, threshold
+    validation, error states.
+  - `GET /api/protocols` route handler — proxies to backend, handles errors.
+  - `POST /GET /DELETE /api/subscriptions` route handlers — full CRUD coverage.
+- `vitest.config.ts` and `vitest.setup.ts` added to `dashboard/`.
+- `test` script added to `dashboard/package.json`.
+
+---
+
 ## [0.10.0] - 2026-03-24 - PR #11: Husky local DX hooks
 
 ### Added
