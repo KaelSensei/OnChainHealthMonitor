@@ -91,6 +91,7 @@ Items not yet started, ordered roughly by priority.
 
 - [x] Build (no push) Docker images on PRs so broken Dockerfiles are caught
       before merge.
+- [x] Husky local DX hooks (commit-msg + pre-commit with lint-staged)
 - [ ] Replace the `go get` workaround in Dockerfiles with properly committed
       `go.mod` / `go.sum` files (requires Go installed in the dev environment
       or a CI step that commits updated module files).

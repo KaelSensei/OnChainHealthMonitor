@@ -11,6 +11,21 @@ Versions map to GitHub pull requests; the project does not use semver tags yet.
 
 ---
 
+## [0.10.0] - 2026-03-24 - PR #11: Husky local DX hooks
+
+### Added
+
+- Root `package.json` with Husky 9, commitlint, lint-staged, and
+  markdownlint-cli as dev dependencies.
+- `.husky/commit-msg` — runs `commitlint` on every local commit, enforcing
+  the same conventional commit rules already checked in CI. Bad commit
+  messages are rejected instantly, before any push.
+- `.husky/pre-commit` — runs `lint-staged` on staged files. Currently lints
+  any staged `*.md` files with markdownlint.
+- `node_modules/` and root `package-lock.json` added to `.gitignore`.
+
+---
+
 ## [0.9.0] - 2026-03-24 - PR #10: Docker build validation on every PR
 
 ### Fixed
