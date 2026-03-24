@@ -1,6 +1,6 @@
 # OnChain Health Monitor - Roadmap
 
-## Status: 🟢 v1.1 - Kafka event pipeline complete
+## Status: 🟢 v1.1 - Event-driven pipeline + dashboard complete
 
 ---
 
@@ -38,10 +38,11 @@
 
 - [x] GitHub Actions: `go vet` + `staticcheck` + `go test -race` + Docker build per service
 - [x] Path-based triggers (only rebuilds the changed service)
-- [x] Push to GHCR on merge to `main`
-- [x] Semantic version releases on `v*.*.*` tags (matrix build across all 4 services)
+- [x] Docker build runs on every PR; push to GHCR on merge to `main` only
+- [x] Semantic version releases on `v*.*.*` tags (matrix build across all services)
 - [x] PR quality checks: commitlint + markdownlint
-- [ ] Deploy to Kubernetes via Helm on merge to main _(planned v1.1)_
+- [x] Husky local hooks: `commit-msg` (commitlint) + `pre-commit` (lint-staged)
+- [ ] Deploy to Kubernetes via Helm on merge to main _(planned v1.2)_
 
 ## ✅ Milestone 5 - Infrastructure as Code
 
@@ -120,10 +121,14 @@ Complete the three pillars of observability - metrics (Prometheus) and traces (J
 - [ ] Export k6 results to Prometheus remote write → Grafana dashboard for trend analysis
 - [ ] Define error budget burn rate alerts based on load test SLO targets
 
-## 🔜 v2.0 - Next.js Dashboard
+## ✅ Milestone 8 - Next.js Dashboard
 
-- [ ] Next.js dashboard with real-time protocol health feed and subscription management UI
-- [ ] Historical health score API (`GET /api/v1/protocols/{id}/history`)
+- [x] Next.js 14 App Router dashboard (port 3001)
+- [x] Protocol health feed with live score polling every 5s
+- [x] Subscription management UI (create / list / delete)
+- [x] Real-time alert panel via WebSocket
+- [x] 55 Vitest unit + integration tests (components + API route handlers)
+- [x] `CI - dashboard` workflow: ESLint lint + `next build` + Vitest + Docker build
 
 ## 🔜 v2.1 - Real On-Chain Indexing
 

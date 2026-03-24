@@ -11,6 +11,30 @@ Versions map to GitHub pull requests; the project does not use semver tags yet.
 
 ---
 
+## [0.12.0] - 2026-03-24 - PR #13: Documentation refresh
+
+### Changed
+
+- `README.md`: Go badge 1.22 → 1.23; stack table updated; `npm install` step
+  added to Quick Start; project structure updated with all new dirs and files;
+  CI/CD diagram reflects Vitest step and build-on-PR behaviour.
+- `ROADMAP.md`: status line updated; Milestone 4 reflects Husky and build-on-PR
+  fixes; dashboard moved from v2.0 backlog to a completed Milestone 8.
+- `docs/development/GETTING_STARTED.md`: Go 1.22 → 1.23; Node.js prerequisite
+  added; `npm install` step added; ports table expanded with all 16 containers.
+- `docs/deployment/CI_CD_GUIDE.md`: pipeline diagram and workflow table include
+  `ci-subscription.yml`, `ci-dashboard.yml`, and `ci-e2e.yml`; Docker build
+  behaviour clarified (build on PRs, push on main only).
+- `docs/architecture/DECISIONS.md`: ADR-016 `next.config.ts` → `next.config.mjs`.
+
+### Added
+
+- `docs/architecture/DECISIONS.md`: ADR-017 documenting the Vitest +
+  `@testing-library/react` + `happy-dom` decision for dashboard testing.
+- `ci-dashboard.yml`: `npm run test` step added before `next build`.
+
+---
+
 ## [0.11.0] - 2026-03-24 - PR #12: Vitest unit and integration tests for Next.js dashboard
 
 ### Added

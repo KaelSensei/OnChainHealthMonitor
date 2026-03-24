@@ -8,7 +8,8 @@ This guide walks you through setting up the project locally and verifying everyt
 
 | Tool | Minimum version | Install |
 |------|----------------|---------|
-| Go | 1.22 | https://go.dev/dl/ |
+| Go | 1.23 | https://go.dev/dl/ |
+| Node.js | 20.x | https://nodejs.org/ (for dashboard dev + Husky hooks) |
 | Docker | 24.x | https://docs.docker.com/get-docker/ |
 | Docker Compose | v2.x (`docker compose`) | Bundled with Docker Desktop; or `apt install docker-compose-plugin` |
 | Make | any | Usually pre-installed; `brew install make` or `apt install make` |
@@ -24,19 +25,24 @@ This guide walks you through setting up the project locally and verifying everyt
 git clone https://github.com/KaelSensei/OnChainHealthMonitor.git
 cd OnChainHealthMonitor
 
-# Build all 4 services and start the full stack (7 containers)
+# Install dev tooling (activates Husky hooks automatically via prepare script)
+npm install
+
+# Build all services and start the full stack
 docker compose up --build
 ```
 
-The first build downloads base images and compiles the Go binaries - expect ~2 minutes.  
+The first build downloads base images and compiles the Go binaries - expect ~2 minutes.
 On subsequent runs, `docker compose up` (without `--build`) starts in seconds.
 
 You should see log lines like:
+
 ```
-onchain_collector  | [collector] Starting collector service on :8081 (mock mode)
-onchain_analyzer   | [analyzer]  Starting analyzer service on :8082
-onchain_notifier   | [notifier]  Starting notifier service on :8083 (alert threshold: score < 30)
-onchain_api        | [api]       Starting API service on :8080
+onchain_collector    | [collector]    Starting collector service on :8081 (mock mode)
+onchain_analyzer     | [analyzer]     Starting analyzer service on :8082
+onchain_notifier     | [notifier]     Starting notifier service on :8083 (alert threshold: score < 30)
+onchain_api          | [api]          Starting API service on :8080
+onchain_subscription | [subscription] Starting subscription service on :8084
 ```
 
 ---
@@ -46,14 +52,20 @@ onchain_api        | [api]       Starting API service on :8080
 | Service | Container name | Port | Purpose |
 |---------|---------------|------|---------|
 | `api` | `onchain_api` | `8080` | Public REST API |
-| `collector` | `onchain_collector` | `8081` | Mock event generator |
+| `collector` | `onchain_collector` | `8081` | Mock DeFi event generator |
 | `analyzer` | `onchain_analyzer` | `8082` | Health score computation |
-| `notifier` | `onchain_notifier` | `8083` | Alert engine |
+| `notifier` | `onchain_notifier` | `8083` | Alert engine + RabbitMQ routing |
+| `subscription` | `onchain_subscription` | `8084` | Subscription CRUD + WebSocket alerts |
+| `dashboard` | `onchain_dashboard` | `3001` | Next.js frontend |
+| Kafka | `onchain_kafka` | `9092` | Event streaming (KRaft mode) |
+| RabbitMQ | `onchain_rabbitmq` | `5672` / `15672` | Per-user alert routing / management UI |
+| Redis | `onchain_redis` | `6379` | Subscription storage |
 | Prometheus | `onchain_prometheus` | `9090` | Metrics scraping + query UI |
 | Grafana | `onchain_grafana` | `3000` | Dashboards (admin / admin) |
 | Jaeger | `onchain_jaeger` | `16686` | Distributed trace UI |
-| OTel Collector | `onchain_otel_collector` | `4317` | OTLP gRPC receiver (used by services internally) |
-| OTel Collector | `onchain_otel_collector` | `4318` | OTLP HTTP receiver |
+| Kong | `onchain_kong` | `8000` / `8001` | API gateway proxy / admin |
+| Swagger UI | `onchain_swagger` | `8090` | Interactive API docs |
+| OTel Collector | `onchain_otel_collector` | `4317` | OTLP gRPC receiver |
 | OTel Collector | `onchain_otel_collector` | `55679` | zpages debug interface |
 
 ---

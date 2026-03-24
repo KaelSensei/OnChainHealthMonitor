@@ -20,16 +20,22 @@ GitHub Actions detects the push
         │                    commitlint + markdownlint
         │
         ├─ services/api/** changed? ──► ci-api.yml
-        │                              go vet → staticcheck → go test → docker build → push to GHCR
+        │                              go vet → staticcheck → go test → docker build (PR) / push GHCR (main)
         │
         ├─ services/collector/** changed? ──► ci-collector.yml
-        │                                    go vet → staticcheck → go test → docker build → push to GHCR
+        │                                    go vet → staticcheck → go test → docker build (PR) / push GHCR (main)
         │
         ├─ services/analyzer/** changed? ──► ci-analyzer.yml
-        │                                   go vet → staticcheck → go test → docker build → push to GHCR
+        │                                   go vet → staticcheck → go test → docker build (PR) / push GHCR (main)
         │
         ├─ services/notifier/** changed? ──► ci-notifier.yml
-        │                                   go vet → staticcheck → go test → docker build → push to GHCR
+        │                                   go vet → staticcheck → go test → docker build (PR) / push GHCR (main)
+        │
+        ├─ services/subscription/** changed? ──► ci-subscription.yml
+        │                                        go vet → staticcheck → go test → docker build (PR) / push GHCR (main)
+        │
+        ├─ dashboard/** changed? ──► ci-dashboard.yml
+        │                            eslint → next build → vitest → docker build (PR) / push GHCR (main)
         │
         ├─ docker-compose / Kong / OpenAPI changed? ──► ci-infra.yml
         │                                              validate configs
@@ -46,11 +52,14 @@ All workflows live in `.github/workflows/`. Here is what each one does:
 
 | File | Trigger | What it does |
 |------|---------|--------------|
-| `ci-api.yml` | Push/PR touching `services/api/**` | Lint, test, build, push `api` image |
-| `ci-collector.yml` | Push/PR touching `services/collector/**` | Lint, test, build, push `collector` image |
-| `ci-analyzer.yml` | Push/PR touching `services/analyzer/**` | Lint, test, build, push `analyzer` image |
-| `ci-notifier.yml` | Push/PR touching `services/notifier/**` | Lint, test, build, push `notifier` image |
+| `ci-api.yml` | Push/PR touching `services/api/**` | Lint, test, build image (push to GHCR on main only) |
+| `ci-collector.yml` | Push/PR touching `services/collector/**` | Lint, test, build image (push to GHCR on main only) |
+| `ci-analyzer.yml` | Push/PR touching `services/analyzer/**` | Lint, test, build image (push to GHCR on main only) |
+| `ci-notifier.yml` | Push/PR touching `services/notifier/**` | Lint, test, build image (push to GHCR on main only) |
+| `ci-subscription.yml` | Push/PR touching `services/subscription/**` | Lint, test, build image (push to GHCR on main only) |
+| `ci-dashboard.yml` | Push/PR touching `dashboard/**` | ESLint, next build, vitest, build image (push to GHCR on main only) |
 | `ci-infra.yml` | Push/PR touching infra files | Validate docker-compose, Kong config, OpenAPI spec |
+| `ci-e2e.yml` | Push/PR touching `e2e/**` | End-to-end smoke tests |
 | `release.yml` | Push of a `v*.*.*` tag | Matrix build of all services with semver tags |
 | `pr-checks.yml` | Every pull request | commitlint + markdownlint |
 
