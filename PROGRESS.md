@@ -62,9 +62,8 @@ Kong proxies the public API. OTel Collector forwards traces to Jaeger.
 | CI - e2e | passing | push/PR on `e2e/**` |
 | PR Checks | passing | all PRs (commitlint + markdownlint) |
 
-**Known gap:** Docker `build-and-push` only runs on `main`, not on PRs.
-A failing Dockerfile is only caught after merge. Fix planned: build (no push)
-on PRs too.
+Docker `build-and-push` now runs on every PR (build only) and pushes to GHCR
+only on `main`. A broken Dockerfile will fail the PR before merge.
 
 ---
 
@@ -90,7 +89,7 @@ Items not yet started, ordered roughly by priority.
 
 ### Near-term
 
-- [ ] Build (no push) Docker images on PRs so broken Dockerfiles are caught
+- [x] Build (no push) Docker images on PRs so broken Dockerfiles are caught
       before merge.
 - [ ] Replace the `go get` workaround in Dockerfiles with properly committed
       `go.mod` / `go.sum` files (requires Go installed in the dev environment
